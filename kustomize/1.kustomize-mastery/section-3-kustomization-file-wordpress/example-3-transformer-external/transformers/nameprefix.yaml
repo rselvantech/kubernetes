@@ -1,0 +1,11 @@
+apiVersion: builtin
+# kind: NamePrefixTransformer  - Kustomize merged the prefix and suffix logic into a single transformer
+kind: PrefixSuffixTransformer
+metadata:
+  name: prodPrefix
+prefix: prod-
+fieldSpecs:
+  - path: metadata/name
+  - path: metadata/labels/app
+  - path: spec/selector/matchLabels/app
+  - path: spec/template/metadata/labels/app

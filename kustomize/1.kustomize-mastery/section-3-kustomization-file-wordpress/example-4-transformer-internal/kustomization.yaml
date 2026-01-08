@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../base
+
+transformers:
+  - |-
+    apiVersion: builtin
+    kind: PrefixSuffixTransformer
+    metadata:
+      name: internal-prodPrefix
+    prefix: prod-
+    fieldSpecs:
+      - path: metadata/name
+      - path: metadata/labels/app
+      - path: spec/selector/matchLabels/app
+      - path: spec/template/metadata/labels/app
