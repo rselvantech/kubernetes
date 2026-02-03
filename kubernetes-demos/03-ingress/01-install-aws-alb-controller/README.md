@@ -58,10 +58,10 @@ The AWS Load Balancer Controller manages AWS Elastic Load Balancers for Kubernet
 - SSL/TLS termination with ACM
 
 **Latest Version Information:**
-- **Controller Version**: v2.14.1 (as of January 2025)
-- **Helm Chart Version**: 1.11.0+
-- **Minimum Kubernetes**: 1.19+
-- **Recommended EKS Version**: 1.27+
+- AWS Load Balancer Controller: v3.0.0 (as of January 2026)
+- Helm Chart: 1.11.0+
+- Kubernetes: 1.22+
+- EKS: 1.27+
 
 ### Architecture
 
@@ -100,7 +100,7 @@ The controller requires permissions to:
 
 ```bash
 # View the official IAM policy
-curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.14.1/docs/install/iam_policy.json
+curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.0.0/docs/install/iam_policy.json
 
 # Quick review of key permissions
 cat iam_policy.json | jq '.Statement[].Action' | head -20
@@ -119,13 +119,13 @@ cat iam_policy.json | jq '.Statement[].Action' | head -20
 
 ```bash
 # For standard AWS regions
-curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.14.1/docs/install/iam_policy.json
+curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.0.0/docs/install/iam_policy.json
 
 # For AWS GovCloud
-# curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.14.1/docs/install/iam_policy_us-gov.json
+# curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.0.0/docs/install/iam_policy_us-gov.json
 
 # For AWS China regions
-# curl -O https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.14.1/docs/install/iam_policy_cn.json
+# curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.0.0/docs/install/iam_policy_cn.json
 ```
 
 **2.2 Create the IAM policy:**
@@ -169,7 +169,7 @@ IRSA allows Kubernetes ServiceAccounts to assume AWS IAM roles:
 **3.2 Get your cluster name:**
 
 ```bash
-export CLUSTER_NAME=$(kubectl config current-context | cut -d'/' -f2)
+export CLUSTER_NAME=$(eksctl get cluster -o json | jq -r '.[0].Name')
 echo "Cluster: $CLUSTER_NAME"
 ```
 
@@ -291,7 +291,7 @@ kubectl logs -n kube-system deployment/aws-load-balancer-controller --tail=50
 
 **Look for these success indicators:**
 ```
-"msg":"version","version":"v2.14.1"
+"msg":"version","version":"v3.0.0"
 "msg":"kubebuilder/controller-runtime","version":"v0.xx.x"
 "msg":"controller/ingress-class-params-reconciler","Starting Controller"
 "msg":"controller/target-group-binding-reconciler","Starting Controller"
@@ -360,14 +360,14 @@ helm get values aws-load-balancer-controller -n kube-system
 **7.2 Important controller flags (set via Helm):**
 
 ```yaml
-# Default configuration
-replicaCount: 2              # High availability
+USER-SUPPLIED VALUES:
 clusterName: <your-cluster>  # Required
 serviceAccount:
   create: false              # Using IRSA ServiceAccount
   name: aws-load-balancer-controller
 
-# Additional common options (not set by default)
+# Additional common options (usually we do not set these explicitly , they get below default values)
+# replicaCount: 2              # High availability
 # ingressClass: alb          # Default IngressClass name
 # enableShield: false        # AWS Shield integration
 # enableWaf: false           # AWS WAF integration
@@ -509,11 +509,5 @@ In this demo, you:
 - AWS EKS Best Practices: https://aws.github.io/aws-eks-best-practices/
 - Helm Chart: https://github.com/aws/eks-charts/tree/master/stable/aws-load-balancer-controller
 
-## Version Information
 
-**Validated with:**
-- AWS Load Balancer Controller: v2.14.1
-- Helm Chart: 1.11.0+
-- Kubernetes: 1.27+
-- EKS: 1.27+
 
