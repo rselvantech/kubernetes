@@ -1,0 +1,769 @@
+# Lab 00: Deploy OpenTelemetry Demo Application
+
+## Lab Overview
+
+This lab deploys the OpenTelemetry (OTel) Demo application on AWS EKS as the foundation for learning Kubernetes Ingress controllers. The OTel Demo is a microservices-based e-commerce application (astronomy shop) that demonstrates distributed tracing, metrics, and logging.
+
+**What you'll accomplish:**
+- [ ] Create an EKS cluster optimized for OTel Demo
+- [ ] Configure VPC CNI with prefix delegation to support 110 pods/node
+- [ ] Deploy OTel Demo with resource-optimized configuration
+- [ ] Verify all services are running
+- [ ] Access the ShoeHub (astronomy shop) frontend
+- [ ] Understand the deployed services and architecture
+
+## Prerequisites
+
+**Required Tools:**
+- AWS CLI v2 configured with credentials
+- kubectl v1.27+
+- helm v3.12+
+- eksctl v0.175+
+- jq (for JSON parsing)
+
+**AWS Requirements:**
+- AWS account with appropriate IAM permissions
+- Free tier credits or budget for EC2 instances (~$75/month for 5 × t3.small nodes)
+- VPC with properly tagged subnets (eksctl creates this automatically)
+
+**Knowledge Requirements:**
+- Basic Kubernetes concepts (pods, services, deployments)
+- Understanding of AWS EKS
+- Familiarity with Helm charts
+
+## OpenTelemetry Demo Application
+
+### What Is It?
+
+The OTel Demo simulates a **real-world e-commerce application** with:
+- **Multi-language microservices** (Go, .NET, Python, TypeScript, C++, Java, Rust, Ruby, PHP, Kotlin)
+- **Realistic shopping features** (browse products, cart, checkout, payment)
+- **Built-in observability** (distributed tracing, metrics, logs)
+- **Feature flags** for experimentation
+- **Load generator** for realistic traffic patterns
+
+**Application Name:** "Astronomy Shop" (previously called "ShoeHub" in older versions)
+- Browse astronomy products (telescopes, star charts, etc.)
+- Add items to cart
+- Complete checkout process
+- View order confirmation
+
+### Architecture
+
+```
+User → Frontend (TypeScript) → Frontend Proxy (Envoy)
+                ↓
+    ┌───────────┴────────────┐
+    ↓                        ↓
+Cart Service           Product Catalog
+(. NET)                (Go + PostgreSQL)
+    ↓                        ↓
+Checkout Service ───→ Multiple Services
+(Go)                  (Payment, Currency, etc.)
+    ↓
+Email, Shipping, Quote
+```
+
+**Observability Stack:**
+```
+Services → OpenTelemetry Collector → Jaeger (traces)
+                                  → Prometheus (metrics)
+                                  → OpenSearch (logs)
+                                  → Grafana (visualization)
+```
+
+### Enabled Services (Optimized Configuration)
+
+**Core Application (10 services):**
+1. **frontend** - Web UI (TypeScript) - Entry point to application
+2. **frontend-proxy** - Envoy reverse proxy - Routes to backend services
+3. **cart** - Shopping cart (.NET + Valkey/Redis)
+4. **checkout** - Order processing (Go)
+5. **payment** - Payment processing (JavaScript)
+6. **currency** - Currency conversion (C++)
+7. **recommendation** - Product recommendations (Python)
+8. **product-catalog** - Product listings (Go + PostgreSQL)
+9. **image-provider** - Product images (nginx)
+
+**Supporting Services (5 services):**
+10. **email** - Order confirmation emails (Ruby)
+11. **shipping** - Shipping cost calculation (Rust)
+12. **quote** - Quote generation (PHP)
+13. **product-reviews** - Product reviews (Python + LLM)
+14. **llm** - Mock language model (Python)
+
+**Infrastructure (2 services):**
+15. **valkey-cart** - Redis-compatible cache for cart data
+16. **postgresql** - Database for product catalog and reviews
+17. **load-generator** - Traffic simulation (Locust/Python)
+
+**Observability (5 components):**
+18. **jaeger** - Distributed tracing UI
+19. **grafana** - Metrics dashboards
+20. **prometheus** - Metrics storage
+21. **opensearch** - Log/trace storage
+22. **otel-collector-agent** - Telemetry collection (runs on each node)
+
+**Disabled Services:**
+- ❌ **kafka** - Not needed (checkout service workaround applied)
+- ❌ **flagd** - Feature flags service (optional)
+- ❌ **accounting** - Order accounting (not needed for Ingress learning)
+- ❌ **fraud-detection** - Fraud detection (not needed for Ingress learning)
+- ❌ **ad** - Advertisement delivery (Java)
+- ❌ **product-reviews** - Product reviews (Python + LLM)
+- ❌ **llm** - Mock language model (Python)
+
+**Total Pods:** ~22+ pods across 5 nodes
+
+### Resource Consumption (Real-World Data)
+
+Based on actual deployment on 5 × t3.small nodes (2GB memory each):
+
+**Heavy Components:**
+- opensearch: 526Mi (after optimization from 984Mi)
+- grafana: 401Mi
+- load-generator: 297Mi
+- prometheus: 342Mi
+
+**Medium Components:**
+- payment: 116Mi
+- otel-collector-agent: 72-110Mi per node (5 total)
+
+**Light Components:**
+- Most application services: 10-100Mi each
+
+**Node Memory Usage (Typical):**
+```
+Node 1: 81-87%
+Node 2: 81-87%
+Node 3: 65-75%
+Node 4: 57-70%
+Node 5: 68-75%
+```
+
+**Why This Matters for Ingress Learning:**
+You'll expose these services via Ingress resources:
+- **frontend-proxy:8080** - Main application UI
+- **jaeger:16686** - Distributed tracing visualization
+- **grafana:80** - Metrics dashboards
+- **(optional)** Individual services for routing demos
+
+## Lab Instructions
+
+### Step 1: Create EKS Cluster
+
+
+**1.1 Create cluster configuration template: `src/eks-cluster-config.template.yaml`**
+
+**1.2 Create `src/eks-cluster.env` file using the format given in `src/eks-cluster.env.example`**
+
+**1.3 Create setup script: `src/install-eks-cluster.sh`**
+
+**1.4 Make script executable and run:**
+
+```bash
+chmod +x install-eks-cluster.sh
+./install-eks-cluster.sh otel-demo us-east-2
+```
+
+**Expected time:** 15-20 minutes
+
+**1.4 Verify cluster creation:**
+
+```bash
+# Verify nodes are ready
+kubectl get nodes
+
+# Expected: 5 nodes, all Ready
+
+# Verify prefix delegation is enabled
+kubectl get daemonset aws-node -n kube-system -o yaml | grep ENABLE_PREFIX_DELEGATION
+# Expected: value: "true"
+
+# Verify pod capacity (CRITICAL!)
+kubectl get nodes -o custom-columns=NAME:.metadata.name,MAX_PODS:.status.allocatable.pods
+# Expected: MAX_PODS = 110 (not 11!)
+```
+
+**Troubleshooting:**
+- If MAX_PODS shows "11" instead of "110", prefix delegation is not enabled
+- This will cause product-catalog to crash with "failed to allocate IP address"
+- Verify VPC CNI addon is installed: `kubectl get daemonset aws-node -n kube-system`
+
+### Step 2: Review Application Configuration
+
+**2.1 Examine the Helm values file:**
+
+```bash
+cd 00-otel-demo-app/src
+cat otel-demo-app-values.yaml
+```
+
+**Key configurations to note:**
+
+**OpenSearch (memory-optimized):**
+```yaml
+opensearch:
+  enabled: true
+  resources:
+    limits:
+      memory: "700Mi"  # Reduced from default 1100Mi
+  opensearchJavaOpts: "-Xms325m -Xmx325m"  # JVM heap size
+```
+
+**Checkout (kafka dependency removed):**
+```yaml
+checkout:
+  enabled: true
+  initContainers: []  # Removes wait-for-kafka init container
+  env:
+    - name: KAFKA_ADDR
+      value: ""  # Prevents kafka connection attempts
+```
+
+**Load Generator (memory-restricted):**
+```yaml
+load-generator:
+  enabled: true
+  resources:
+    limits:
+      memory: "300Mi"  # Reduced from default 1500Mi
+```
+
+**Kafka (disabled):**
+```yaml
+kafka:
+  enabled: false  # Not needed after checkout workaround
+```
+
+**2.2 Understand the configuration rationale:**
+
+**Why these specific settings?**
+
+1. **OpenSearch memory reduction:** Default 1.1GB causes OOM kills on t3.small nodes
+2. **Checkout init container removal:** Eliminates dependency on kafka
+3. **Load generator restriction:** Default 1.5GB is excessive for demo purposes
+4. **Kafka disabled:** checkout service patched to work without it
+5. **5 nodes required:** Memory-intensive observability stack needs headroom
+
+### Step 3: Deploy OpenTelemetry Demo
+
+#### Step 3.1: Deploy Manually 
+
+**3.1.1 Add Helm repository:**
+
+```bash
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+helm repo update
+```
+
+**3.1.2 Verify chart version:**
+
+```bash
+helm search repo open-telemetry/opentelemetry-demo
+```
+
+**Expected output:**
+```
+NAME                                    CHART VERSION   APP VERSION
+open-telemetry/opentelemetry-demo       2.x.x           2.2.0
+```
+
+**3.1.3 Create Namespcae:**
+
+```bash
+kubectl create ns otel-demo
+```
+
+**Expected output:**
+```
+namespace/otel-demo created
+```
+
+**3.1.2 Install Otel Demo App**
+
+helm install  otel-demo open-telemetry/opentelemetry-demo -n otel-demo --values otel-demo-app-values.yaml
+
+**3.3 Install using the provided script:**
+
+```bash
+cd 00-otel-demo-app/src
+./install-otel-demo-app.sh
+```
+
+**Or install manually:**
+
+```bash
+helm install otel-demo open-telemetry/opentelemetry-demo \
+  --namespace otel-demo \
+  --create-namespace \
+  --values demo-.yaml
+```
+
+**Expected output:**
+```
+NAME: otel-demo
+NAMESPACE: otel-demo
+STATUS: deployed
+REVISION: 1
+```
+
+### Step 4: Validate Deployment (Manual Checks)
+
+**4.1 Monitor pod startup:**
+
+```bash
+# Watch pods start (takes 3-5 minutes)
+kubectl get pods -n otel-demo -w
+
+# Press Ctrl+C when all pods show Running or Completed
+```
+
+**4.2 Check all pod statuses:**
+
+```bash
+kubectl get pods -n otel-demo
+```
+
+**Expected output (27 pods total):**
+```
+NAME                               READY   STATUS    RESTARTS   AGE
+ad-xxx                            1/1     Running   0          5m
+cart-xxx                          1/1     Running   0          5m
+checkout-xxx                      1/1     Running   0          5m
+currency-xxx                      1/1     Running   0          5m
+email-xxx                         1/1     Running   0          5m
+frontend-xxx                      1/1     Running   0          5m
+frontend-proxy-xxx                1/1     Running   0          5m
+grafana-xxx                       4/4     Running   0          5m
+image-provider-xxx                1/1     Running   0          5m
+jaeger-xxx                        1/1     Running   0          5m
+llm-xxx                           1/1     Running   0          5m
+load-generator-xxx                1/1     Running   2-5        5m
+opensearch-0                      1/1     Running   10-20      5m
+otel-collector-agent-xxx (×5)     1/1     Running   0          5m
+payment-xxx                       1/1     Running   0          5m
+postgresql-xxx                    1/1     Running   0          5m
+product-catalog-xxx               1/1     Running   0-2        5m
+product-reviews-xxx               1/1     Running   0          5m
+prometheus-xxx                    1/1     Running   0          5m
+quote-xxx                         1/1     Running   0          5m
+recommendation-xxx                1/1     Running   0          5m
+shipping-xxx                      1/1     Running   0          5m
+valkey-cart-xxx                   1/1     Running   0          5m
+```
+
+**Note:** 
+- `load-generator` may show 2-5 restarts (normal - it's stress-testing the system)
+- `opensearch-0` may show 10-20 restarts initially (stabilizes after JVM adjusts)
+- `product-catalog` may show 0-2 restarts (normal during initial database connection)
+
+**4.3 Check services:**
+
+```bash
+kubectl get svc -n otel-demo
+```
+
+**Key services to note:**
+```
+NAME                    TYPE        PORT(S)
+frontend-proxy          ClusterIP   8080/TCP    ← Main UI
+jaeger                  ClusterIP   16686/TCP   ← Tracing UI
+grafana                 ClusterIP   80/TCP      ← Dashboards
+prometheus              ClusterIP   9090/TCP    ← Metrics
+```
+
+**4.4 Check resource consumption:**
+
+```bash
+# Node-level memory usage
+kubectl top nodes
+
+# Expected: 57-87% memory per node (5 nodes total)
+
+# Pod-level memory usage
+kubectl top pods -n otel-demo
+```
+
+**Heavy pods to watch:**
+- opensearch: ~500-700Mi
+- grafana: ~400Mi
+- prometheus: ~340Mi
+- load-generator: ~300Mi
+
+**4.5 Verify endpoints are available:**
+
+```bash
+kubectl get endpoints -n otel-demo
+```
+
+All services should have at least one endpoint (IP:PORT).
+
+### Step 5: Access the Application
+
+**5.1 Port-forward to the frontend:**
+
+```bash
+kubectl port-forward -n otel-demo svc/frontend-proxy 8080:8080
+```
+
+**5.2 Open in browser:**
+
+```
+http://localhost:8080
+```
+
+**You should see:**
+- "Astronomy Shop" homepage (or "ShoeHub" in some versions)
+- Product listings (telescopes, star charts, etc.)
+- Shopping cart functionality
+- Checkout process
+
+**5.3 Test the application:**
+
+- Browse products
+- Add items to cart
+- Proceed through checkout
+- View order confirmation
+
+**5.4 Access observability tools:**
+
+**Jaeger (Distributed Tracing):**
+```bash
+kubectl port-forward -n otel-demo svc/jaeger 16686:16686
+```
+Open: http://localhost:16686
+
+**Grafana (Metrics Dashboards):**
+```bash
+kubectl port-forward -n otel-demo svc/grafana 3000:80
+```
+Open: http://localhost:3000
+
+**Note:** Default Grafana dashboards:
+- There is NO "Demo Dashboard" or "Span Metrics" pre-configured
+- You'll see Prometheus data sources available
+- Custom dashboards can be created from Prometheus metrics
+
+### Step 6: Verify Core Services
+
+**6.1 Test frontend connectivity:**
+
+```bash
+# From inside the cluster
+kubectl run -n otel-demo test-curl --image=curlimages/curl --rm -it --restart=Never -- \
+  curl -s http://frontend-proxy:8080 | head -20
+```
+
+Should return HTML from the frontend.
+
+**6.2 Test Jaeger API:**
+
+```bash
+kubectl run -n otel-demo test-curl --image=curlimages/curl --rm -it --restart=Never -- \
+  curl -s http://jaeger:16686/api/services
+```
+
+Should return JSON with service list.
+
+**6.3 Check OpenTelemetry Collector:**
+
+```bash
+kubectl logs -n otel-demo deployment/otel-collector --tail=20
+```
+
+Should show traces and metrics being received.
+
+## Common Deployment Issues
+
+### Issue 1: product-catalog CrashLoopBackOff
+
+**Symptom:**
+```bash
+kubectl get pods -n otel-demo | grep product-catalog
+product-catalog-xxx   0/1   CrashLoopBackOff
+```
+
+**Root Cause:** Failed to allocate IP address (node has only 11 pod IPs, not 110)
+
+**Solution:**
+```bash
+# Verify prefix delegation is enabled
+kubectl get daemonset aws-node -n kube-system -o yaml | grep ENABLE_PREFIX_DELEGATION
+
+# Should show: value: "true"
+
+# Verify node capacity
+kubectl get nodes -o custom-columns=NAME:.metadata.name,MAX_PODS:.status.allocatable.pods
+
+# Should show: MAX_PODS = 110 (not 11!)
+```
+
+**Fix if not enabled:**
+```bash
+kubectl set env daemonset aws-node -n kube-system ENABLE_PREFIX_DELEGATION=true
+
+# Recycle nodes or redeploy cluster
+```
+
+### Issue 2: checkout Service Stuck in Init
+
+**Symptom:**
+```bash
+kubectl get pods -n otel-demo | grep checkout
+checkout-xxx   0/1   Init:0/1
+```
+
+**Root Cause:** Init container waiting for kafka to be ready
+
+**Solution:** Ensure kafka is disabled in demo-.yaml:
+```yaml
+kafka:
+  enabled: false
+```
+
+And checkout has init containers removed:
+```yaml
+checkout:
+  initContainers: []
+  env:
+    - name: KAFKA_ADDR
+      value: ""
+```
+
+### Issue 3: opensearch OOMKilled
+
+**Symptom:**
+```bash
+kubectl get pods -n otel-demo | grep opensearch
+opensearch-0   0/1   OOMKilled
+
+kubectl describe pod opensearch-0 -n otel-demo
+# Shows: Reason: OOMKilled
+```
+
+**Root Cause:** OpenSearch trying to use more memory than allocated
+
+**Solution:** Verify memory limits in demo-.yaml:
+```yaml
+opensearch:
+  resources:
+    limits:
+      memory: "700Mi"
+  opensearchJavaOpts: "-Xms325m -Xmx325m"
+```
+
+**If still crashing, increase to 900Mi** (requires more nodes or larger instances).
+
+### Issue 4: Nodes Above 90% Memory
+
+**Symptom:**
+```bash
+kubectl top nodes
+# Shows: MEMORY% > 90%
+```
+
+**Solutions (in order of preference):**
+
+**A. Scale to more nodes:**
+```bash
+eksctl scale nodegroup --cluster=otel-demo --name=otel-demo --nodes=6
+```
+
+**B. Disable product-reviews (saves 81Mi):**
+```yaml
+product-reviews:
+  enabled: false
+```
+
+**C. Disable llm (saves 69Mi):**
+```yaml
+llm:
+  enabled: false
+```
+
+**D. Disable opensearch (saves 526Mi, but loses trace storage):**
+```yaml
+opensearch:
+  enabled: false
+```
+
+### Issue 5: load-generator Restarting
+
+**Symptom:**
+```bash
+kubectl get pods -n otel-demo | grep load-generator
+load-generator-xxx   1/1   Running   5
+```
+
+**Root Cause:** Load generator is intentionally stress-testing the system
+
+**Solution:** This is NORMAL. 2-5 restarts are expected as it generates heavy load.
+
+**If excessive (>10 restarts), reduce load:**
+```yaml
+load-generator:
+  resources:
+    limits:
+      memory: "500Mi"  # Increase from 300Mi
+```
+
+## Cleanup
+
+### Uninstall OTel Demo
+
+```bash
+cd 00-otel-demo-app/src
+./cleanup-otel-demo.sh
+```
+
+Or manually:
+```bash
+helm uninstall otel-demo -n otel-demo
+kubectl delete namespace otel-demo
+```
+
+### Delete EKS Cluster
+
+```bash
+eksctl delete cluster --name otel-demo
+```
+
+**Note:** This deletes ALL resources including load balancers, volumes, and the VPC (if created by eksctl).
+
+## Key Concepts Explained
+
+### Prefix Delegation (ENABLE_PREFIX_DELEGATION)
+
+**Without prefix delegation:**
+- t3.small node gets 3 ENIs
+- Each ENI gets ~4 IP addresses
+- **Total: ~11 usable pod IPs per node**
+
+**With prefix delegation:**
+- t3.small node gets /28 CIDR blocks
+- **Total: ~110 usable pod IPs per node**
+
+**Why it matters:**
+OTel Demo needs 27 pods total. Without prefix delegation, you'd need 3+ nodes just for IP addresses, even though you have CPU/memory available.
+
+### StatefulSet vs Deployment
+
+**StatefulSet (opensearch-0, postgresql):**
+- Stable network identity (same pod name across restarts)
+- Persistent storage (survives pod restarts)
+- Ordered deployment and scaling
+- **Does NOT restart with `kubectl rollout restart deployment`**
+
+**Deployment (all other services):**
+- Random pod names (hash suffix)
+- Ephemeral storage (lost on restart)
+- Parallel deployment
+- **Restarts with `kubectl rollout restart deployment`**
+
+### Resource Requests vs Limits
+
+```yaml
+resources:
+  requests:
+    memory: "500Mi"  # Kubernetes guarantees this much
+  limits:
+    memory: "700Mi"  # Pod can use up to this much
+```
+
+**Requests:** Used for scheduling (node must have this available)
+**Limits:** Enforced by cgroup (pod OOMKilled if exceeded)
+
+### OTel Collector Architecture
+
+```
+Application Pods → OTel Collector Agent (DaemonSet, 1 per node)
+                       ↓
+        OTel Collector Gateway (optional, not used in this demo)
+                       ↓
+          ┌────────────┴──────────┐
+          ↓                       ↓
+      Jaeger                 Prometheus
+    (traces)                 (metrics)
+          ↓                       ↓
+     OpenSearch              Grafana
+   (trace storage)         (visualization)
+```
+
+## Validation Checklist
+
+Before proceeding to Ingress demos, verify:
+
+- [ ] All 27 pods are Running (except load-generator may have a few restarts)
+- [ ] opensearch-0 is Running (not OOMKilled)
+- [ ] Nodes are at 57-87% memory (not >90%)
+- [ ] Node pod capacity shows 110 (not 11)
+- [ ] Frontend accessible via port-forward at http://localhost:8080
+- [ ] Jaeger accessible via port-forward at http://localhost:16686
+- [ ] Grafana accessible via port-forward at http://localhost:3000
+- [ ] No pods stuck in Init state
+- [ ] No "failed to allocate IP address" errors in events
+
+## What You Learned
+
+In this lab, you:
+- ✅ Created an EKS cluster with prefix delegation for high pod density
+- ✅ Deployed a production-like microservices application (27 pods)
+- ✅ Configured resource limits to fit on 5 × t3.small nodes
+- ✅ Troubleshot real-world deployment issues (IP exhaustion, OOM, init containers)
+- ✅ Understood the OTel Demo architecture and observability stack
+- ✅ Prepared the foundation for Ingress controller demos
+
+## Next Steps
+
+**Demo 1.1: Install AWS Load Balancer Controller**
+- Set up IRSA for ALB controller
+- Install controller via Helm
+- Verify controller is operational
+
+**Demo 1.2: Install Traefik Ingress Controller**
+- Install Traefik as alternative controller
+- Configure dashboard access
+- Compare with AWS LB Controller
+
+## Troubleshooting Reference
+
+**Quick diagnostic commands:**
+
+```bash
+# Overall cluster health
+kubectl get nodes
+kubectl get pods -n otel-demo
+kubectl top nodes
+kubectl top pods -n otel-demo
+
+# Specific pod issues
+kubectl describe pod <pod-name> -n otel-demo
+kubectl logs <pod-name> -n otel-demo
+kubectl logs <pod-name> -n otel-demo --previous  # For crashed pods
+
+# Network/IP issues
+kubectl get daemonset aws-node -n kube-system -o yaml | grep ENABLE_PREFIX_DELEGATION
+kubectl get nodes -o custom-columns=NAME:.metadata.name,MAX_PODS:.status.allocatable.pods
+
+# Resource pressure
+kubectl describe node <node-name> | grep -A 5 "Allocated resources"
+```
+
+## Additional Resources
+
+- OpenTelemetry Demo Documentation: https://opentelemetry.io/docs/demo/
+- OpenTelemetry Demo GitHub: https://github.com/open-telemetry/opentelemetry-demo
+- Helm Chart: https://github.com/open-telemetry/opentelemetry-helm-charts/tree/main/charts/opentelemetry-demo
+- EKS Best Practices: https://aws.github.io/aws-eks-best-practices/
+
+## Version Information
+
+**Validated with:**
+- Kubernetes: 1.33
+- EKS: 1.33
+- OpenTelemetry Demo: 2.2.0
+- Helm Chart: 2.x.x
+- Instance Type: 5 × t3.small (2GB RAM, 2 vCPU each)
+
+**Last Updated:** February 2025

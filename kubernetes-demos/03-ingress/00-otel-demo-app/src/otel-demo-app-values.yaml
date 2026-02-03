@@ -1,0 +1,215 @@
+# OpenTelemetry Demo - Minimal Configuration for Ingress Learning
+# This configuration enables only essential services needed for Kubernetes Ingress scenarios
+
+default:
+  envOverrides: []
+
+opensearch:
+  enabled: true
+  replicas: 1
+  # Reduce memory allocation
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "500Mi"  
+    limits:
+      cpu: "500m"
+      memory: "700Mi"  # Down from 1100Mi
+  # Set JVM heap size
+  opensearchJavaOpts: "-Xms325m -Xmx325m"  # default -> "-Xms400m -Xmx400m"
+
+# ========================================
+# APPLICATION COMPONENTS
+# ========================================
+
+components:
+  # Frontend - Main web UI (ESSENTIAL)
+  frontend:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Frontend Proxy - Envoy proxy (ESSENTIAL)
+  frontend-proxy:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Product Catalog - gRPC service for product listings (ESSENTIAL for gRPC routing)
+  product-catalog:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Cart Service - Shopping cart (ESSENTIAL for multi-service routing)
+  cart:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Checkout Service - Order processing (ESSENTIAL for service orchestration)
+  checkout:
+    enabled: true
+    useDefault:
+      env: true
+    # This wipes out the 'wait-for-kafka' and any other init checks
+    initContainers: [] 
+    env:
+      - name: KAFKA_ADDR
+        value: ""            # Prevents the application from trying to connect to kafka
+      - name: CHECKOUT_PORT  # Since we need to overrite above env , we need to explicitly give other env varibale values here
+      - name: CHECKOUT_PORT
+        value: "8080"
+      - name: CART_ADDR
+        value: cart:8080
+      - name: CURRENCY_ADDR
+        value: currency:8080
+      - name: EMAIL_ADDR
+        value: http://email:8080
+      - name: PAYMENT_ADDR
+        value: payment:8080
+      - name: PRODUCT_CATALOG_ADDR
+        value: product-catalog:8080
+      - name: SHIPPING_ADDR
+        value: http://shipping:8080
+      - name: FLAGD_HOST
+        value: flagd
+      - name: FLAGD_PORT
+        value: "8013"
+      - name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://$(OTEL_COLLECTOR_NAME):4317
+      - name: GOMEMLIMIT
+        value: 16MiB
+
+  # Recommendation Service - Product recommendations (ESSENTIAL for canary deployments)
+  recommendation:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Payment Service - Payment processing (USEFUL for auth scenarios)
+  payment:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Currency Service - Currency conversion (USEFUL for additional gRPC example)
+  currency:
+    enabled: true
+    useDefault:
+      env: true
+
+
+
+  # Shipping Service - Needed for checkout
+  shipping:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Email Service - - Needed for checkout - Backend only, no routing needed
+  email:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Quote Service - - Needed for checkout
+  quote:
+    enabled: true
+    useDefault:
+      env: true
+
+  # PostgreSQL - Database (needed for product-catalog.Also accounting and product reviews use this DB)
+  postgresql:
+    enabled: true
+    useDefault:
+      env: true
+
+
+  # ========================================
+  # SERVICES TO DISABLE (NOT NEEDED)
+  # ========================================
+
+  product-reviews:
+    enabled: false
+    useDefault:
+      env: true
+
+  llm:
+    enabled: false
+    useDefault:
+      env: true
+
+  # Ad Service - Advertisements (USEFUL for A/B testing)
+  ad:
+    enabled: false
+    useDefault:
+      env: true
+
+  # Accounting Service - Not user-facing
+  accounting:
+    enabled: false
+    useDefault:
+      env: true
+
+  # Fraud Detection Service - Not needed for routing
+  fraud-detection:
+    enabled: false
+    useDefault:
+      env: true
+
+  # Flagd - Feature flags service (OPTIONAL - can enable if needed for A/B testing)
+  flagd:
+    enabled: false
+    useDefault:
+      env: true
+
+
+  # ========================================
+  # INFRASTRUCTURE COMPONENTS
+  # ========================================
+
+  # Load Generator - ESSENTIAL for traffic simulation
+  load-generator:
+    enabled: true
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "120Mi"
+      limits:
+        cpu: "300m"
+        memory: "300Mi"                         # Down from 1500Mi
+
+  # Redis/Valkey - Required by cart service
+  valkey-cart:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Image Provider - Static image server (Needed this to show product images in the portal)
+  image-provider:
+    enabled: true
+    useDefault:
+      env: true
+
+  # Kafka - Enable and Restrict resource usage
+  # kafka:
+  #   enabled: true
+  #   # For Kafka, 'replicas' is usually defined here, but memory is under resources
+  #   resources:
+  #     requests:
+  #       memory: "350Mi"
+  #     limits:
+  #       memory: "450Mi"                         # Down from 600Mi
+  #   # To pass JVM heap opts to this component:
+  #   env:
+  #     - name: KAFKA_HEAP_OPTS
+  #       value: "-Xms325M -Xmx325M"              # default -> "-Xmx400M -Xms400M"
+
+  #Kafka - DISABLE (not needed without accounting/fraud services.also disbaling this requires change in checkout module config)
+
+  kafka:
+    enabled: false
+    useDefault:
+      env: true  
+
