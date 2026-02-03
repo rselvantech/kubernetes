@@ -4,19 +4,12 @@
 default:
   envOverrides: []
 
+# OpenSearch - DISABLED (OOM on t3.small nodes, not needed for Ingress learning)
+# Jaeger falls back to in-memory trace storage when opensearch is disabled
+# Impact: APM Dashboard log panels won't work. Traces and metrics dashboards work fine.
+# Full observability with opensearch can be enabled later with larger infra or fewer services.
 opensearch:
-  enabled: true
-  replicas: 1
-  # Reduce memory allocation
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "500Mi"  
-    limits:
-      cpu: "500m"
-      memory: "700Mi"  # Down from 1100Mi
-  # Set JVM heap size
-  opensearchJavaOpts: "-Xms325m -Xmx325m"  # default -> "-Xms400m -Xmx400m"
+  enabled: false
 
 # ========================================
 # APPLICATION COMPONENTS
@@ -48,17 +41,17 @@ components:
       env: true
 
   # Checkout Service - Order processing (ESSENTIAL for service orchestration)
+  # NOTE: Kafka dependency removed via initContainers override and KAFKA_ADDR env
   checkout:
     enabled: true
     useDefault:
       env: true
-    # This wipes out the 'wait-for-kafka' and any other init checks
-    initContainers: [] 
+    # Wipes out the 'wait-for-kafka' init container
+    initContainers: []
     env:
       - name: KAFKA_ADDR
         value: ""            # Prevents the application from trying to connect to kafka
-      - name: CHECKOUT_PORT  # Since we need to overrite above env , we need to explicitly give other env varibale values here
-      - name: CHECKOUT_PORT
+      - name: CHECKOUT_PORT  # Since we override env above, we must explicitly set all other env values
         value: "8080"
       - name: CART_ADDR
         value: cart:8080
@@ -81,25 +74,23 @@ components:
       - name: GOMEMLIMIT
         value: 16MiB
 
-  # Recommendation Service - Product recommendations (ESSENTIAL for canary deployments)
+  # Recommendation Service - Product recommendations
   recommendation:
     enabled: true
     useDefault:
       env: true
 
-  # Payment Service - Payment processing (USEFUL for auth scenarios)
+  # Payment Service - Payment processing
   payment:
     enabled: true
     useDefault:
       env: true
 
-  # Currency Service - Currency conversion (USEFUL for additional gRPC example)
+  # Currency Service - Currency conversion
   currency:
     enabled: true
     useDefault:
       env: true
-
-
 
   # Shipping Service - Needed for checkout
   shipping:
@@ -107,69 +98,69 @@ components:
     useDefault:
       env: true
 
-  # Email Service - - Needed for checkout - Backend only, no routing needed
+  # Email Service - Needed for checkout
   email:
     enabled: true
     useDefault:
       env: true
 
-  # Quote Service - - Needed for checkout
+  # Quote Service - Needed for checkout
   quote:
     enabled: true
     useDefault:
       env: true
 
-  # PostgreSQL - Database (needed for product-catalog.Also accounting and product reviews use this DB)
+  # PostgreSQL - Database (needed for product-catalog)
   postgresql:
     enabled: true
     useDefault:
       env: true
 
-
   # ========================================
-  # SERVICES TO DISABLE (NOT NEEDED)
+  # SERVICES DISABLED (NOT NEEDED FOR INGRESS LEARNING)
   # ========================================
 
+  # Product Reviews - Only adds review section in UI, not needed for core shopping flow
   product-reviews:
     enabled: false
     useDefault:
       env: true
 
+  # LLM - Only used by product-reviews
   llm:
     enabled: false
     useDefault:
       env: true
 
-  # Ad Service - Advertisements (USEFUL for A/B testing)
+  # Ad Service - Not needed for Ingress learning
   ad:
     enabled: false
     useDefault:
       env: true
 
-  # Accounting Service - Not user-facing
+  # Accounting Service - Requires kafka, not user-facing
   accounting:
     enabled: false
     useDefault:
       env: true
 
-  # Fraud Detection Service - Not needed for routing
+  # Fraud Detection Service - Requires kafka, not needed
   fraud-detection:
     enabled: false
     useDefault:
       env: true
 
-  # Flagd - Feature flags service (OPTIONAL - can enable if needed for A/B testing)
+  # Flagd - Feature flags (optional, not needed for Ingress learning)
   flagd:
     enabled: false
     useDefault:
       env: true
 
-
   # ========================================
   # INFRASTRUCTURE COMPONENTS
   # ========================================
 
-  # Load Generator - ESSENTIAL for traffic simulation
+  # Load Generator - Simulates realistic user traffic
   load-generator:
     enabled: true
     resources:
@@ -178,38 +169,50 @@ components:
         memory: "120Mi"
       limits:
         cpu: "300m"
-        memory: "300Mi"                         # Down from 1500Mi
+        memory: "300Mi"                         # Down from default 1500Mi
 
-  # Redis/Valkey - Required by cart service
+  # Valkey - Redis-compatible cache, required by cart service
   valkey-cart:
     enabled: true
     useDefault:
-      env: true
+      env: false
 
-  # Image Provider - Static image server (Needed this to show product images in the portal)
+  # Image Provider - Static image server (needed to show product images)
   image-provider:
     enabled: true
     useDefault:
       env: true
 
-  # Kafka - Enable and Restrict resource usage
-  # kafka:
-  #   enabled: true
-  #   # For Kafka, 'replicas' is usually defined here, but memory is under resources
-  #   resources:
-  #     requests:
-  #       memory: "350Mi"
-  #     limits:
-  #       memory: "450Mi"                         # Down from 600Mi
-  #   # To pass JVM heap opts to this component:
-  #   env:
-  #     - name: KAFKA_HEAP_OPTS
-  #       value: "-Xms325M -Xmx325M"              # default -> "-Xmx400M -Xms400M"
-
-  #Kafka - DISABLE (not needed without accounting/fraud services.also disbaling this requires change in checkout module config)
-
+  # Kafka - DISABLED
+  # Accounting and fraud-detection services are disabled, so kafka is not needed.
+  # Checkout service is patched above to work without kafka.
   kafka:
     enabled: false
     useDefault:
-      env: true  
+      env: true
 
+# ========================================
+# OBSERVABILITY COMPONENTS
+# (enabled by default in the Helm chart, explicitly documented here for clarity)
+# ========================================
+
+# Jaeger - Distributed tracing UI
+# Falls back to in-memory storage when opensearch is disabled
+jaeger:
+  enabled: true
+
+# Grafana - Metrics and trace dashboards
+# 8 pre-configured dashboards shipped with the chart
+# Access URL: http://localhost:3000/grafana/ (note the sub-path)
+# No login required - anonymous access enabled
+grafana:
+  enabled: true
+
+# Prometheus - Metrics collection and storage
+prometheus:
+  enabled: true
+
+# OpenTelemetry Collector - Runs as DaemonSet (1 agent per node)
+# Collects traces and metrics from all app services
+otelCollector:
+  enabled: true
