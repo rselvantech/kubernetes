@@ -63,6 +63,22 @@ The AWS Load Balancer Controller manages AWS Elastic Load Balancers for Kubernet
 - Kubernetes: 1.22+
 - EKS: 1.27+
 
+## Directory Structure
+
+```
+01-install-aws-alb-controller/
+├── README.md                           # This file
+└── src/
+    ├── iam_policy.json                 # IAM policy (downloaded by script)
+    ├── install-alb-controller.sh       # Automated installation script
+    └── cleanup-alb-controller.sh       # Cleanup script
+```
+
+**File Roles:**
+- `iam_policy.json` - Auto-downloaded from AWS LB Controller GitHub, defines required IAM permissions
+- `install-alb-controller.sh` - Automates entire installation (IAM policy + IRSA + Helm install)
+- `cleanup-alb-controller.sh` - Removes controller, ServiceAccount, IAM role, and IAM policy
+
 ### Architecture
 
 ```
@@ -113,9 +129,69 @@ cat iam_policy.json | jq '.Statement[].Action' | head -20
 - `shield:*` - AWS Shield integration
 - `acm:*` - Certificate management
 
-### Step 2: Create IAM Policy
+### Step 2: Preparation & Installing AWS Load Balancer Controller
 
-**2.1 Download the latest IAM policy:**
+You can create IAM policy and install  using either the automated script OR manually using commands.
+
+## Step 2.1: Install Using Script (Recommended)
+
+**2.1.1 Run the installation script:**
+
+```bash
+cd 01-install-aws-alb-controller/src
+chmod +x install-alb-controller.sh
+./install-alb-controller.sh
+```
+
+The script automates:
+- ✅ Prerequisites check (AWS CLI, kubectl, helm, eksctl)
+- ✅ Cluster name detection
+- ✅ IAM policy download and creation (skips if exists)
+- ✅ IRSA creation (ServiceAccount + IAM role)
+- ✅ Helm installation with correct parameters
+- ✅ Wait for controller to be ready
+- ✅ Basic verification
+
+**Expected output:**
+```
+================================================
+  AWS Load Balancer Controller Installation
+================================================
+
+[INFO] kubectl: Client Version: v1.29.0
+[INFO] helm: v3.14.0
+[INFO] eksctl: 0.175.0
+[SUCCESS] Prerequisites check passed!
+
+[INFO] Cluster Name: otel-demo-3
+[INFO] AWS Account: 123456789012
+[INFO] AWS Region: us-east-2
+
+[INFO] Downloading IAM policy document...
+[INFO] Creating IAM policy...
+[SUCCESS] IAM policy created: arn:aws:iam::123456789012:policy/AWSLoadBalancerControllerIAMPolicy
+
+[INFO] Creating ServiceAccount with IAM role...
+[SUCCESS] IRSA created successfully
+
+[INFO] Installing controller...
+[SUCCESS] Helm installation complete!
+
+[INFO] Waiting for deployment to be available...
+[SUCCESS] Controller is ready!
+
+[SUCCESS] Installation completed successfully!
+```
+
+**2.1.2 Skip to Step 5 for validation.**
+
+---
+
+## Step 2.2: Install Manually Using Helm
+
+### Create IAM Policy
+
+**2.2.1 Download the latest IAM policy:**
 
 ```bash
 # For standard AWS regions
@@ -128,7 +204,7 @@ curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-lo
 # curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v3.0.0/docs/install/iam_policy_cn.json
 ```
 
-**2.2 Create the IAM policy:**
+**2.2.2 Create the IAM policy:**
 
 ```bash
 aws iam create-policy \
@@ -148,7 +224,7 @@ aws iam create-policy \
 }
 ```
 
-**2.3 Save the Policy ARN:**
+**2.2.3 Save the Policy ARN:**
 
 ```bash
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -156,9 +232,9 @@ export POLICY_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:policy/AWSLoadBalancerControll
 echo $POLICY_ARN
 ```
 
-### Step 3: Create IAM Role with IRSA
+### Create IAM Role with IRSA
 
-**3.1 Understand IRSA (IAM Roles for Service Accounts):**
+**2.2.4 Understand IRSA (IAM Roles for Service Accounts):**
 
 IRSA allows Kubernetes ServiceAccounts to assume AWS IAM roles:
 - Pods use ServiceAccount tokens
@@ -166,14 +242,14 @@ IRSA allows Kubernetes ServiceAccounts to assume AWS IAM roles:
 - No need for AWS credentials in pods
 - Fine-grained permissions per ServiceAccount
 
-**3.2 Get your cluster name:**
+**2.2.5 Get your cluster name:**
 
 ```bash
 export CLUSTER_NAME=$(eksctl get cluster -o json | jq -r '.[0].Name')
 echo "Cluster: $CLUSTER_NAME"
 ```
 
-**3.3 Create the IAM role and ServiceAccount:**
+**2.2.6 Create the IAM role and ServiceAccount:**
 
 ```bash
 eksctl create iamserviceaccount \
@@ -190,7 +266,7 @@ eksctl create iamserviceaccount \
 - Creates Kubernetes ServiceAccount with annotation: `eks.amazonaws.com/role-arn`
 - Sets up trust relationship between OIDC provider and role
 
-**3.4 Verify the ServiceAccount:**
+**2.2.7 Verify the ServiceAccount:**
 
 ```bash
 kubectl get serviceaccount aws-load-balancer-controller -n kube-system -o yaml
@@ -203,16 +279,16 @@ metadata:
     eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/eksctl-...
 ```
 
-### Step 4: Install AWS Load Balancer Controller with Helm
+### Install AWS Load Balancer Controller with Helm
 
-**4.1 Add the EKS Helm chart repository:**
+**2.2.8 Add the EKS Helm chart repository:**
 
 ```bash
 helm repo add eks https://aws.github.io/eks-charts
 helm repo update
 ```
 
-**4.2 Verify chart version:**
+**2.2.9 Verify chart version:**
 
 ```bash
 helm search repo eks/aws-load-balancer-controller
@@ -224,7 +300,7 @@ NAME                               CHART VERSION   APP VERSION   DESCRIPTION
 eks/aws-load-balancer-controller   1.11.0          v2.14.1       AWS Load Balancer Controller...
 ```
 
-**4.3 Install the controller:**
+**2.2.10 Install the controller:**
 
 ```bash
 helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
@@ -248,13 +324,13 @@ STATUS: deployed
 REVISION: 1
 ```
 
-**4.4 Verify Helm release:**
+**2.2.11 Verify Helm release:**
 
 ```bash
 helm list -n kube-system
 ```
 
-### Step 5: Validate Installation
+## Step 5: Validate Installation
 
 **5.1 Check controller pods:**
 
@@ -321,7 +397,7 @@ NAME   CONTROLLER                    AGE
 alb    ingress.k8s.aws/alb           1m
 ```
 
-### Step 6: Verify AWS Integration
+## Step 6: Verify AWS Integration
 
 **6.1 Check controller can communicate with AWS:**
 
@@ -349,7 +425,7 @@ AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/to
 AWS_REGION=us-east-1
 ```
 
-### Step 7: Understanding Controller Configuration
+## Step 7: Understanding Controller Configuration
 
 **7.1 View all controller configuration:**
 
@@ -380,7 +456,7 @@ serviceAccount:
 kubectl describe deployment aws-load-balancer-controller -n kube-system | grep -A 20 "Args:"
 ```
 
-### Step 8: Verify Prerequisites for ALB Creation
+## Step 8: Verify Prerequisites for ALB Creation
 
 **8.1 Check subnet tagging:**
 
@@ -411,16 +487,6 @@ aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=ta
 
 ## Troubleshooting
 
-**Controller pods not starting:**
-```bash
-# Check pod events
-kubectl describe pod -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
-
-# Common issues:
-# - Image pull errors: Check internet connectivity from nodes
-# - CrashLoopBackOff: Check logs for configuration errors
-```
-
 **IRSA authentication errors:**
 ```bash
 # Verify OIDC provider exists
@@ -445,6 +511,90 @@ kubectl get secret -n kube-system aws-load-balancer-tls
 kubectl logs -n kube-system deployment/aws-load-balancer-controller | grep -i subnet
 
 # Fix: Add required tags to subnets
+```
+
+## Cleanup
+
+### Using Script (Recommended)
+
+```bash
+cd 01-install-aws-alb-controller/src
+chmod +x cleanup-aws-alb-controller.sh
+./cleanup-aws-alb-controller.sh
+```
+
+The script will prompt for confirmation, then remove:
+- Helm release
+- Kubernetes ServiceAccount
+- IAM Role (created by IRSA)
+- IAM Policy (if not attached to other roles)
+- Downloaded `iam_policy.json` file
+
+**Expected output:**
+```
+This script will remove:
+  - Helm release (aws-load-balancer-controller)
+  - Kubernetes ServiceAccount
+  - IAM Role (created by IRSA)
+  - IAM Policy (AWSLoadBalancerControllerIAMPolicy)
+
+Continue? (y/N) y
+
+[INFO] Uninstalling aws-load-balancer-controller...
+[SUCCESS] Helm release uninstalled
+[INFO] Deleting ServiceAccount and associated IAM role...
+[SUCCESS] IRSA deleted
+[INFO] Deleting IAM policy...
+[SUCCESS] IAM policy deleted
+[SUCCESS] Cleanup completed!
+```
+
+### Manual Cleanup
+
+**1. Uninstall Helm release:**
+
+```bash
+helm uninstall aws-load-balancer-controller -n kube-system
+```
+
+**2. Delete ServiceAccount and IAM role:**
+
+```bash
+eksctl delete iamserviceaccount \
+  --cluster=$CLUSTER_NAME \
+  --namespace=kube-system \
+  --name=aws-load-balancer-controller \
+  --wait
+```
+
+**3. Delete IAM policy (optional):**
+
+```bash
+# Get policy ARN
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export POLICY_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:policy/AWSLoadBalancerControllerIAMPolicy"
+
+# Check if policy is attached to any roles
+aws iam list-entities-for-policy --policy-arn $POLICY_ARN
+
+# If not attached(it will not be), delete it
+aws iam delete-policy --policy-arn $POLICY_ARN
+```
+
+**4. Verify cleanup:**
+
+```bash
+# Check deployment removed
+kubectl get deployment aws-load-balancer-controller -n kube-system
+# Expected: Error from server (NotFound)
+
+# Check ServiceAccount removed
+kubectl get serviceaccount aws-load-balancer-controller -n kube-system
+# Expected: Error from server (NotFound)
+
+# Check IngressClass removed
+kubectl get ingressclass alb
+# Expected: Error from server (NotFound)
 ```
 
 ## Key Concepts Explained
