@@ -32,8 +32,11 @@ This lab deploys the OpenTelemetry (OTel) Demo application on AWS EKS as the fou
 
 ## Version Information
 
-- Kubernetes / EKS: 1.33
-- Instance Type: 5 × t3.small (2GB RAM each)
+- OTel Demo App: 2.2.0
+- Helm Chart: 0.40.2
+- Helm: 3.19.0
+- Kubernetes: 1.27+
+- EKS: 1.33
 
 ## Directory Structure
 

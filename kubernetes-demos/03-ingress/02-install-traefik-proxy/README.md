@@ -56,11 +56,12 @@ Traefik is a modern HTTP reverse proxy and load balancer for microservices:
 - Web UI dashboard
 - Multi-provider support (Kubernetes, Docker, Consul, etc.)
 
-**Latest Version Information:**
-- **Traefik Version**: v3.x (Traefik Proxy 3)
-- **Helm Chart Version**: 39.0.0+ (January 2025)
-- **Minimum Kubernetes**: 1.22+
-- **Recommended**: 1.27+
+**Version Information:**
+- Traefik: v3.6.7
+- Helm Chart: 39.0.0
+- Helm: 3.19.0
+- Kubernetes: 1.27+
+- EKS: 1.33
 
 ### Architecture
 
@@ -89,9 +90,25 @@ User Request (HTTP/HTTPS)
 - **Traefik**: One load balancer for ALL Ingress resources
 - **AWS LB Controller**: One ALB per Ingress resource (by default)
 
-## Demo Instructions
+## Directory Structure
 
-### Step 1: Understand Traefik Configuration
+```
+02-install-traefik-controller/
+├── README.md                           # This file
+└── src/
+    ├── traefik-values.yaml             # Helm values - EKS-optimized configuration
+    ├── install-traefik-controller.sh   # Automated installation script
+    └── cleanup-traefik-controller.sh   # Cleanup script
+```
+
+**File Roles:**
+- `traefik-values.yaml` - Helm values configuring Traefik for EKS (NLB, dashboard, metrics, 2 replicas)
+- `install-traefik-controller.sh` - Automates entire installation (Helm repo + install + verification)
+- `cleanup-traefik-controller.sh` - Removes Traefik, namespace, and AWS NLB
+
+# Demo Instructions
+
+## Step 1: Understand Traefik Configuration
 
 **1.1 Review Traefik's deployment model:**
 
@@ -108,16 +125,71 @@ EntryPoints are network entry points into Traefik:
 - `websecure`: HTTPS (port 443)
 - `traefik`: Dashboard/API (port 9000)
 
-### Step 2: Add Traefik Helm Repository
 
-**2.1 Add the official Traefik Helm repository:**
+## Step 2: Install Traefik Ingress Controller
+
+You can install using either the automated script OR manual Helm commands.
+
+## Step 2.1: Install Using Script (Recommended)
+
+**2.1.1 Run the installation script:**
+
+```bash
+cd 02-install-traefik-controller/src
+chmod +x install-traefik-controller.sh
+./install-traefik-controller.sh
+```
+
+The script automates:
+- ✅ Prerequisites check (kubectl, helm)
+- ✅ Helm repository setup (traefik/traefik)
+- ✅ Namespace creation (traefik)
+- ✅ Helm installation with EKS-optimized values
+- ✅ Wait for deployment and LoadBalancer provisioning
+- ✅ Basic verification (deployment, service, IngressClass, CRDs)
+
+**Expected output:**
+```
+================================================
+  Traefik Ingress Controller Installation
+================================================
+
+[INFO] kubectl: Client Version: v1.29.0
+[INFO] helm: v3.14.0
+[SUCCESS] Prerequisites check passed!
+
+[INFO] Adding Traefik Helm repository...
+[SUCCESS] Helm repository ready!
+
+[INFO] Creating namespace: traefik
+[SUCCESS] Namespace ready!
+
+[INFO] Installing Traefik...
+[SUCCESS] Helm installation complete!
+
+[INFO] Waiting for deployment to be available...
+[INFO] Waiting for LoadBalancer to provision...
+This may take 1-2 minutes while AWS provisions the NLB...
+[SUCCESS] LoadBalancer ready: a1234567890abcdef-1234567890.elb.us-east-2.amazonaws.com
+[SUCCESS] Traefik is ready!
+
+[SUCCESS] Installation completed successfully!
+```
+
+**2.1.2 Skip to Step 5 for validation.**
+
+## Step 2.2:  Install Manually Using Helm
+
+### Step 2.2.1: Add Traefik Helm Repository
+
+**2.2.1.1 Add the official Traefik Helm repository:**
 
 ```bash
 helm repo add traefik https://traefik.github.io/charts
 helm repo update
 ```
 
-**2.2 Verify chart version:**
+**2.2.1.2 Verify chart version:**
 
 ```bash
 helm search repo traefik/traefik
@@ -126,177 +198,29 @@ helm search repo traefik/traefik
 **Expected output:**
 ```
 NAME            CHART VERSION   APP VERSION   DESCRIPTION
-traefik/traefik 39.0.0          v3.2.0        A Traefik based Kubernetes ingress controller
+traefik/traefik 39.0.0          v3.6.7          A Traefik based Kubernetes ingress controller
 ```
 
-**2.3 View default values (optional):**
+**2.2.1.3 View default values (optional):**
 
 ```bash
 # See all configuration options
 helm show values traefik/traefik > traefik-default-values.yaml
 ```
 
-### Step 3: Create Custom Values File
-
-**3.1 Create values file for EKS:**
+### Step 2.2.2: Create Custom Values File
 
 Create `src/traefik-values.yaml`:
 
-```yaml
-# Traefik Configuration for AWS EKS
-# Optimized for Ingress learning with OTel Demo
+### Step 2.2.3:  Install Traefik
 
-# Global settings
-globalArguments:
-  - "--global.checknewversion=false"  # Disable version check
-  - "--global.sendanonymoususage=false"  # Disable telemetry
-
-# Deployment settings
-deployment:
-  enabled: true
-  kind: Deployment
-  replicas: 2  # High availability
-  podAnnotations: {}
-  podLabels: {}
-
-# Service configuration
-service:
-  enabled: true
-  type: LoadBalancer  # Creates AWS NLB
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # Use NLB (faster, cheaper)
-    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
-  spec: {}
-
-# Ports / EntryPoints
-ports:
-  # HTTP
-  web:
-    port: 8000
-    expose:
-      default: true
-    exposedPort: 80
-    protocol: TCP
-  # HTTPS
-  websecure:
-    port: 8443
-    expose:
-      default: true
-    exposedPort: 443
-    protocol: TCP
-    # TLS enabled by default
-    tls:
-      enabled: true
-  # Dashboard
-  traefik:
-    port: 9000
-    expose:
-      default: false  # Don't expose externally
-    exposedPort: 9000
-    protocol: TCP
-
-# IngressClass
-ingressClass:
-  enabled: true
-  isDefaultClass: false  # Don't make it default (ALB is already installed)
-  name: traefik
-
-# Kubernetes Ingress Provider
-providers:
-  kubernetesingress:
-    enabled: true
-    allowExternalNameServices: false
-    allowEmptyServices: false
-    publishedService:
-      enabled: true
-  # Traefik CRDs (IngressRoute, Middleware, etc.)
-  kubernetescrd:
-    enabled: true
-    allowExternalNameServices: false
-    allowEmptyServices: false
-    allowCrossNamespace: false
-
-# Logs
-logs:
-  general:
-    level: INFO  # DEBUG for troubleshooting
-  access:
-    enabled: true
-    format: common  # or json
-
-# Metrics (Prometheus)
-metrics:
-  prometheus:
-    enabled: true
-    addEntryPointsLabels: true
-    addRoutersLabels: true
-    addServicesLabels: true
-    entryPoint: metrics
-    service:
-      enabled: true
-
-# Dashboard
-ingressRoute:
-  dashboard:
-    enabled: true  # Enable dashboard IngressRoute
-    annotations: {}
-    labels: {}
-    matchRule: PathPrefix(`/dashboard`) || PathPrefix(`/api`)
-    entryPoints: ["traefik"]
-    middlewares: []
-    tls: {}
-
-# Pilot (Traefik Hub) - disable
-pilot:
-  enabled: false
-
-# Resources
-resources:
-  requests:
-    cpu: "100m"
-    memory: "50Mi"
-  limits:
-    cpu: "300m"
-    memory: "150Mi"
-
-# Autoscaling (disabled for learning)
-autoscaling:
-  enabled: false
-
-# Pod Security Context
-securityContext:
-  capabilities:
-    drop: [ALL]
-  readOnlyRootFilesystem: true
-  runAsGroup: 65532
-  runAsNonRoot: true
-  runAsUser: 65532
-
-# Pod Disruption Budget
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
-```
-
-**3.2 Save this file:**
-
-```bash
-# Make sure you're in the demo directory
-cd 02-traefik-controller/src
-
-# Create the values file (copy the above YAML content)
-# Or download from your repository
-```
-
-### Step 4: Install Traefik
-
-**4.1 Create namespace for Traefik:**
+**2.2.3.1 Create namespace for Traefik:**
 
 ```bash
 kubectl create namespace traefik
 ```
 
-**4.2 Install Traefik using Helm:**
+**2.2.3.2 Install Traefik using Helm:**
 
 ```bash
 helm install traefik traefik/traefik \
@@ -314,13 +238,13 @@ REVISION: 1
 TEST SUITE: None
 ```
 
-**4.3 Verify Helm release:**
+**2.2.3.3  Verify Helm release:**
 
 ```bash
 helm list -n traefik
 ```
 
-### Step 5: Validate Installation
+## Step 5: Validate Installation
 
 **5.1 Check Traefik deployment:**
 
@@ -361,6 +285,17 @@ traefik   LoadBalancer   10.100.xx.xx    axxxxxxxxxxxxx.us-east-1.elb.amazonaws.
 
 **Important:** Note the `EXTERNAL-IP` - this is your AWS Network Load Balancer DNS name.
 
+
+**5.4 Get LoadBalancer hostname:**
+```bash
+kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+```
+
+**Expected output:**
+```
+axxxxxxxxxxxxx.us-east-1.elb.amazonaws.com
+```
+
 **5.4 Wait for Load Balancer to be ready:**
 
 ```bash
@@ -384,7 +319,7 @@ time="..." level=info msg="Server configuration reloaded on :8000"
 time="..." level=info msg="Server configuration reloaded on :8443"
 ```
 
-### Step 6: Verify IngressClass
+## Step 6: Verify IngressClass
 
 **6.1 Check IngressClass creation:**
 
@@ -434,17 +369,11 @@ http://localhost:9000/dashboard/
 **7.3 Explore the dashboard:**
 
 **Dashboard sections:**
+- **EntryPoints**: Metrics (9100), traefik (9000) web (8000), websecure (8443)
 - **HTTP Routers**: View all HTTP routes
-- **Services**: Backend services  
-- **Middlewares**: Active middleware
-- **EntryPoints**: web (80), websecure (443), traefik (9000)
-- **Features**: TLS certificates, metrics
-
-**What you should see:**
-- EntryPoints: web, websecure, traefik
-- No HTTP routers yet (we haven't created Ingress resources)
-- Traefik service itself listed
-- Metrics endpoint available
+- **HTTP Services**: Backend services  
+- **Features**: Tracing (OFF), METRICS (Prometheus), ACCESSLOG (ON)
+- **Providers**: KubernetesIngress, KubernetesCRD
 
 **7.4 View Traefik metrics:**
 
@@ -493,7 +422,7 @@ helm get values traefik -n traefik
 **EntryPoints:**
 - Define network entry points
 - Each can have different settings (TLS, middleware, etc.)
-- web (80), websecure (443), traefik (9000)
+- Metrics (9100), traefik (9000) web (8000), websecure (8443)
 
 **Providers:**
 - `kubernetesingress`: Standard Kubernetes Ingress
@@ -505,38 +434,7 @@ helm get values traefik -n traefik
 - Single NLB for all Ingress resources
 - Cheaper than multiple ALBs
 
-### Step 10: Comparison with AWS Load Balancer Controller
-
-**10.1 Review key differences:**
-
-| Aspect | AWS LB Controller | Traefik |
-|--------|------------------|---------|
-| **Load Balancer** | One ALB per Ingress | One NLB for all Ingress |
-| **Cost** | $16-25/month per ALB | ~$16/month total (one NLB) |
-| **Provisioning** | 2-3 minutes per ALB | Instant (uses existing LB) |
-| **AWS Integration** | Native (WAF, ACM, Cognito) | Basic (NLB only) |
-| **Advanced Routing** | Annotations | CRDs (IngressRoute) |
-| **Middleware** | Limited | Extensive (auth, rate-limit, etc.) |
-| **Dashboard** | No | Yes (built-in) |
-| **Multi-cloud** | AWS only | Any Kubernetes |
-| **Configuration** | Annotations | CRDs + Annotations |
-
-**10.2 When to use each:**
-
-**Use AWS LB Controller when:**
-- Need AWS-specific features (WAF, ACM, Cognito)
-- Want ALB per application for isolation
-- Compliance requires AWS-native services
-- Using multiple AZs with specific routing
-
-**Use Traefik when:**
-- Cost optimization (single LB)
-- Need advanced middleware
-- Want real-time config updates
-- Prefer dashboard for monitoring
-- Multi-cloud portability
-
-### Step 11: Test Basic Connectivity
+### Step 10: Test Basic Connectivity
 
 **11.1 Get Traefik's Load Balancer DNS:**
 
@@ -572,32 +470,146 @@ kubectl logs -n traefik deployment/traefik
 # - Configuration errors in values.yaml
 ```
 
-**Load Balancer not provisioning:**
-```bash
-# Check service events
-kubectl describe svc traefik -n traefik
-
-# Verify AWS credentials (should work same as ALB controller)
-# Check VPC/subnet configuration
-```
-
-**Dashboard not accessible:**
-```bash
-# Verify port-forward is active
-kubectl get pods -n traefik
-
-# Check if dashboard is enabled
-helm get values traefik -n traefik | grep -A 5 "dashboard"
-
-# Try different port
-kubectl port-forward -n traefik deployment/traefik 9001:9000
-```
-
 **CRDs not found:**
 ```bash
 # Reinstall with CRDs
 helm upgrade traefik traefik/traefik -n traefik --values traefik-values.yaml
 ```
+
+## Cleanup
+
+### Using Script (Recommended)
+
+```bash
+cd 02-install-traefik-controller/src
+chmod +x cleanup-traefik-controller.sh
+./cleanup-traefik-controller.sh
+```
+
+The script will prompt for confirmation, then remove:
+- Helm release
+- Namespace (traefik) and all resources
+- AWS Network Load Balancer (auto-deleted when Service is removed)
+- Note: CRDs are NOT deleted (cluster-wide, may be used elsewhere)
+
+**Expected output:**
+```
+This script will remove:
+  - Helm release (traefik)
+  - Namespace (traefik) and all resources in it
+  - AWS Network Load Balancer (will be deleted automatically)
+
+Traefik CRDs will NOT be deleted (cluster-wide resources).
+
+Continue? (y/N) y
+
+[INFO] Uninstalling traefik...
+[SUCCESS] Helm release uninstalled
+[INFO] Deleting namespace: traefik
+[SUCCESS] Namespace deleted
+[WARNING] Traefik CRDs are cluster-wide and may be used by other Traefik instances
+[WARNING] Skipping CRD deletion for safety
+[SUCCESS] Cleanup completed!
+```
+
+**For Deleting CRDs check `Manual Cleanup` section below**
+
+
+### Manual Cleanup
+
+**1. Uninstall Helm release:**
+
+```bash
+helm uninstall traefik -n traefik
+```
+
+**2. Delete namespace:**
+
+```bash
+kubectl delete namespace traefik
+```
+
+This automatically deletes:
+- Traefik deployment and pods
+- Traefik LoadBalancer service
+- AWS Network Load Balancer (takes a few minutes)
+- All other resources in the namespace
+
+**3. (Optional) Delete IngressClass:**
+
+```bash
+kubectl delete ingressclass traefik
+```
+
+**4. (Optional) Delete CRDs if no other Traefik instances exist:**
+
+**When SHOULD You Delete CRDs?**
+
+`Delete CRDs only when:`
+
+✅ No other Traefik instances exist in the cluster
+
+✅ No IngressRoutes, Middlewares, etc. exist in ANY namespace
+
+✅ You're completely removing Traefik from the cluster
+
+```bash
+# List Traefik CRDs
+kubectl get crd | grep traefik
+
+# Delete all Traefik CRDs (CAUTION: cluster-wide)
+kubectl get crd -o name | grep traefik | xargs kubectl delete
+```
+
+**5. Verify cleanup:**
+
+```bash
+# Check namespace removed
+kubectl get namespace traefik
+# Expected: Error from server (NotFound)
+
+# Check deployment removed
+kubectl get deployment traefik -n traefik
+# Expected: Error from server (NotFound)
+
+# Check LoadBalancer removed
+kubectl get svc traefik -n traefik
+# Expected: Error from server (NotFound)
+```
+
+**Note:** AWS NLB deletion appears in the AWS console within 1-2 minutes.
+
+
+## Comparison with AWS Load Balancer Controller
+
+**Review key differences:**
+
+| Aspect | AWS LB Controller | Traefik |
+|--------|------------------|---------|
+| **Load Balancer** | One ALB per Ingress | One NLB for all Ingress |
+| **Cost** | $16-25/month per ALB | ~$16/month total (one NLB) |
+| **Provisioning** | 2-3 minutes per ALB | Instant (uses existing LB) |
+| **AWS Integration** | Native (WAF, ACM, Cognito) | Basic (NLB only) |
+| **Advanced Routing** | Annotations | CRDs (IngressRoute) |
+| **Middleware** | Limited | Extensive (auth, rate-limit, etc.) |
+| **Dashboard** | No | Yes (built-in) |
+| **Multi-cloud** | AWS only | Any Kubernetes |
+| **Configuration** | Annotations | CRDs + Annotations |
+
+**10.2 When to use each:**
+
+**Use AWS LB Controller when:**
+- Need AWS-specific features (WAF, ACM, Cognito)
+- Want ALB per application for isolation
+- Compliance requires AWS-native services
+- Using multiple AZs with specific routing
+
+**Use Traefik when:**
+- Cost optimization (single LB)
+- Need advanced middleware
+- Want real-time config updates
+- Prefer dashboard for monitoring
+- Multi-cloud portability
 
 ## Key Concepts Explained
 
@@ -668,12 +680,3 @@ In this demo, you:
 - Traefik Helm Chart: https://github.com/traefik/traefik-helm-chart
 - Traefik on Kubernetes: https://doc.traefik.io/traefik/providers/kubernetes-ingress/
 - IngressRoute Documentation: https://doc.traefik.io/traefik/routing/providers/kubernetes-crd/
-
-## Version Information
-
-**Validated with:**
-- Traefik: v3.2.0+
-- Helm Chart: 39.0.0+
-- Kubernetes: 1.27+
-- EKS: 1.27+
-

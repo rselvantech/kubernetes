@@ -57,27 +57,12 @@ The AWS Load Balancer Controller manages AWS Elastic Load Balancers for Kubernet
 - Health checks and monitoring via CloudWatch
 - SSL/TLS termination with ACM
 
-**Latest Version Information:**
+**Version Information:**
 - AWS Load Balancer Controller: v3.0.0 (as of January 2026)
-- Helm Chart: 1.11.0+
-- Kubernetes: 1.22+
-- EKS: 1.27+
-
-## Directory Structure
-
-```
-01-install-aws-alb-controller/
-├── README.md                           # This file
-└── src/
-    ├── iam_policy.json                 # IAM policy (downloaded by script)
-    ├── install-alb-controller.sh       # Automated installation script
-    └── cleanup-alb-controller.sh       # Cleanup script
-```
-
-**File Roles:**
-- `iam_policy.json` - Auto-downloaded from AWS LB Controller GitHub, defines required IAM permissions
-- `install-alb-controller.sh` - Automates entire installation (IAM policy + IRSA + Helm install)
-- `cleanup-alb-controller.sh` - Removes controller, ServiceAccount, IAM role, and IAM policy
+- Helm Chart: 3.0.0
+- Helm: 3.19.0
+- Kubernetes: 1.27+
+- EKS: 1.33
 
 ### Architecture
 
@@ -98,6 +83,22 @@ User Request (HTTP/HTTPS)
 - ServiceAccount with IRSA
 - Watches for Ingress/Service resources
 - Reconciles with AWS APIs
+
+## Directory Structure
+
+```
+01-install-aws-alb-controller/
+├── README.md                           # This file
+└── src/
+    ├── iam_policy.json                 # IAM policy (downloaded by script)
+    ├── install-alb-controller.sh       # Automated installation script
+    └── cleanup-alb-controller.sh       # Cleanup script
+```
+
+**File Roles:**
+- `iam_policy.json` - Auto-downloaded from AWS LB Controller GitHub, defines required IAM permissions
+- `install-alb-controller.sh` - Automates entire installation (IAM policy + IRSA + Helm install)
+- `cleanup-alb-controller.sh` - Removes controller, ServiceAccount, IAM role, and IAM policy
 
 ## Demo Instructions
 
