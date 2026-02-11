@@ -1,4 +1,4 @@
-# Expose OTel Demo Frontend Using Ingress
+# Demo-03: Expose OTel Demo Frontend Using Ingress
 
 ## Demo Overview
 
@@ -77,7 +77,19 @@ frontend-proxy Pods (port 8080)
 - **ALB Controller:** Load balancing happens in AWS (managed service)
 - **Traefik:** Load balancing happens in Kubernetes pods (software)
 
----
+## Directory Structure
+
+```
+03-expose-frontend/
+├── README.md
+├── images
+│   └── traefik-db.png
+└── src
+    ├── frontend-alb-ingress.yaml
+    └── frontend-traefik-ingress.yaml
+```
+
+# Demo Instructions
 
 ## Part A: Expose Frontend with AWS Load Balancer Controller
 

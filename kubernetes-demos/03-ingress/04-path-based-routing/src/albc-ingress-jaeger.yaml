@@ -1,0 +1,68 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jaeger-alb
+  namespace: otel-demo
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/group.name: multi-service  # Same ALB
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    # below actions annotations is not working.ALB Listerner rule does not transalte this into tranform rule
+    # alb.ingress.kubernetes.io/actions.jaeger-rewrite: |
+    #   {
+    #     "Type": "forward",
+    #     "ForwardConfig": {
+    #       "TargetGroups": [{
+    #         "ServiceName": "jaeger",
+    #         "ServicePort": "16686",
+    #         "Weight": 100
+    #       }]
+    #     }
+    #   }
+    
+    # alb.ingress.kubernetes.io/transforms.jaeger: |
+    #   [
+    #     {
+    #       "type": "url-rewrite",
+    #       "urlRewriteConfig": {
+    #         "rewrites": [
+    #           {
+    #             "regex": "^/jaeger(?:/(.*))?$",
+    #             "replace": "/jaeger/ui/$1"
+    #           }
+    #         ]
+    #       }
+    #     }
+    #   ]
+
+    alb.ingress.kubernetes.io/transforms.jaeger: |
+      [
+        {
+          "type": "url-rewrite",
+          "urlRewriteConfig": {
+            "rewrites": [
+              {
+                "regex": "^/jaeger(?:/(.*))?$",
+                "replace": "/"
+              }
+            ]
+          }
+        }
+      ]
+spec:
+  ingressClassName: alb
+  rules:
+  - http:
+      paths:
+      - path: /jaeger
+        pathType: Prefix
+        backend:
+          service:
+            # name: jaeger-rewrite
+            # port:
+            #   name: use-annotation
+          service:
+            name: jaeger
+            port:
+              number: 16686

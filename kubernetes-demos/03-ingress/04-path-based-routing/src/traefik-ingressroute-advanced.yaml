@@ -1,0 +1,53 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: multi-path-advanced
+  namespace: otel-demo
+spec:
+  entryPoints:
+    - web  # HTTP entry point (port 80)
+  
+  routes:
+  # Route 1: Frontend - No middleware
+  # Priority 1 (lowest) - catch-all for root path
+  - match: PathPrefix(`/`) && !PathPrefix(`/grafana`) && !PathPrefix(`/jaeger`)
+    kind: Rule
+    priority: 1
+    services:
+    - name: frontend-proxy
+      port: 8080
+  
+  # Route 2: Grafana - No middleware needed
+  # Priority 10 (higher) - evaluated before root catch-all
+  - match: PathPrefix(`/grafana`)
+    kind: Rule
+    priority: 10
+    services:
+    - name: grafana
+      port: 80
+  
+  # Route 3: Jaeger - With StripPrefix middleware
+  # Priority 10 (higher) - evaluated before root catch-all
+  - match: PathPrefix(`/jaeger`)
+    kind: Rule
+    priority: 10
+    middlewares:
+    # - name: jaeger-stripprefix  # Only applies to this route
+      - name: jaeger-rewrite
+    services:
+    - name: jaeger
+      port: 16686
+
+---
+# Alternative: HTTPS entry point (requires TLS certificate)
+# apiVersion: traefik.io/v1alpha1
+# kind: IngressRoute
+# metadata:
+#   name: multi-path-advanced-https
+#   namespace: otel-demo
+# spec:
+#   entryPoints:
+#     - websecure  # HTTPS entry point (port 443)
+#   tls: {}        # Enable TLS
+#   routes:
+#     # ... same routes as above

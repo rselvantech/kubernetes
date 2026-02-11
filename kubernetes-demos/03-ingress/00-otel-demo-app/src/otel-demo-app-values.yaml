@@ -212,7 +212,10 @@ grafana:
 prometheus:
   enabled: true
 
+#Field name changed from `otelCollector` to `opentelemetryCollector`
+#**Remove this entire block** - the collector is enabled by default and doesn't need explicit config in the values file
+
 # OpenTelemetry Collector - Runs as DaemonSet (1 agent per node)
 # Collects traces and metrics from all app services
-otelCollector:
-  enabled: true
+# opentelemetry-collector:
+#   enabled: true

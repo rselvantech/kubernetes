@@ -1,4 +1,4 @@
-# Demo 1.1: Install AWS Load Balancer Controller
+# Demo-01: Install AWS Load Balancer Controller
 
 ## Demo Overview
 

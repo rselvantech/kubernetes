@@ -1,4 +1,4 @@
-# Demo 1.2: Install Traefik Ingress Controller
+# Demo-02: Install Traefik Ingress Controller
 
 ## Demo Overview
 
