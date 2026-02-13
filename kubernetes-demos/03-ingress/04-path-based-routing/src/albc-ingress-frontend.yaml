@@ -7,6 +7,8 @@ metadata:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/group.name: multi-service  # Share same ALB
+    # Rule priority controlled via group.order.Lower number evaluated first. Catch-all / must always have highest order number
+    alb.ingress.kubernetes.io/group.order: "100"
     alb.ingress.kubernetes.io/healthcheck-path: /
 spec:
   ingressClassName: alb

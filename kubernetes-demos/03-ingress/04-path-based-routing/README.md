@@ -1,13 +1,13 @@
-# Demo-04: Path-Based Routing
+# Demo-04: Path-Based Routing - ALB Controller & Traefik
 
 ## Demo Overview
 
 This demo consolidates multiple services behind a single load balancer using path-based routing. Instead of creating separate Ingress resources (and load balancers) for each service, you'll route different URL paths to different backend services, significantly reducing costs and simplifying infrastructure.
 
 **What you'll do:**
-- Create a single Ingress with multiple path rules
+- Create Ingress resources with multiple path rules
 - Route `/` to frontend, `/jaeger` to Jaeger, `/grafana` to Grafana
-- Handle path rewriting for services that don't expect the prefix
+- Handle path redirects for services with sub-path base URLs
 - Compare ALB vs Traefik implementation
 - Understand cost savings and trade-offs
 
@@ -21,8 +21,8 @@ This demo consolidates multiple services behind a single load balancer using pat
 
 **Verify Prerequisites:**
 
-### 1.Check OTel services exist
-```
+### 1. Check OTel services exist
+```bash
 kubectl get svc -n otel-demo frontend-proxy jaeger grafana
 ```
 
@@ -30,16 +30,16 @@ kubectl get svc -n otel-demo frontend-proxy jaeger grafana
 ```
 NAME             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                                                                                            AGE
 frontend-proxy   ClusterIP   10.100.142.85   <none>        8080/TCP                                                                                                           6m39s
-jaeger           ClusterIP   10.100.98.154   <none>        5775/UDP,5778/TCP,6831/UDP,6832/UDP,9411/TCP,14250/TCP,14267/TCP,14268/TCP,4317/TCP,4318/TCP,16686/TCP,16685/TCP   6m39s
+jaeger           ClusterIP   10.100.98.154   <none>        5775/UDP,...,16686/TCP,16685/TCP                                                                                    6m39s
 grafana          ClusterIP   10.100.167.18   <none>        80/TCP                                                                                                             6m39s
 ```
 
-### 2.Check endpoints
-```
+### 2. Check endpoints
+```bash
 kubectl get endpoints frontend-proxy jaeger grafana -n otel-demo
 ```
 
-**Expected: All 3 services has endpoints assigned**
+**Expected: All 3 services have endpoints assigned**
 ```
 NAME             ENDPOINTS                                                               AGE
 frontend-proxy   192.168.37.147:8080                                                     7m46s
@@ -47,8 +47,8 @@ jaeger           192.168.90.66:4317,192.168.90.66:14268,192.168.90.66:4318 + 9 m
 grafana          192.168.37.150:3000                                                     7m46s
 ```
 
-### 3.Check controllers installed
-```
+### 3. Check controllers installed
+```bash
 kubectl get ingressclass
 ```
 
@@ -59,8 +59,8 @@ alb       ingress.k8s.aws/alb             <none>       10m
 traefik   traefik.io/ingress-controller   <none>       6m39s
 ```
 
-### 4.Check ALB Controller Deployment
-```
+### 4. Check ALB Controller Deployment
+```bash
 kubectl get deployment aws-load-balancer-controller -n kube-system
 ```
 
@@ -70,17 +70,18 @@ NAME                           READY   UP-TO-DATE   AVAILABLE   AGE
 aws-load-balancer-controller   2/2     2            2           16m
 ```
 
-### 5.Check Traefik service
-```
+### 5. Check Traefik service
+```bash
 kubectl get svc traefik -n traefik
 ```
 
-**Expected: NLB DNS assinged**
+**Expected: NLB DNS assigned**
 ```
 NAME      TYPE           CLUSTER-IP      EXTERNAL-IP                                                                   PORT(S)                      AGE
 traefik   LoadBalancer   10.100.196.90   k8s-traefik-traefik-813afc9727-5cdd2e25a133d32c.elb.us-east-2.amazonaws.com   80:32195/TCP,443:30647/TCP   12m
 ```
 
+---
 
 ## Demo Objectives
 
@@ -88,7 +89,7 @@ By the end of this demo, you will:
 
 1. ✅ Create multi-path Ingress resources
 2. ✅ Understand path matching and routing
-3. ✅ Implement path rewriting/stripping
+3. ✅ Implement path redirects for services with sub-path base URLs
 4. ✅ Compare ALB vs Traefik path handling
 5. ✅ Understand cost savings from consolidation
 
@@ -102,16 +103,17 @@ Cost: ~$50/month
 
 ### **After (This demo):**
 ```
-1 Ingress resource → 1 ALB → 3 Services (routed by path)
+3 Ingress resources (group.name) → 1 ALB → 3 Services (routed by path)
 Cost: ~$17/month
 ```
 
 ### **Request Flow:**
 
 ```
-User requests /           → ALB routes to frontend-proxy:8080
-User requests /jaeger/*   → ALB strips /jaeger, routes to jaeger:16686
-User requests /grafana/*  → ALB forwards as-is to grafana:80
+User requests /              → ALB/Traefik routes to frontend-proxy:8080
+User requests /grafana/*     → ALB/Traefik forwards as-is to grafana:80
+User requests /jaeger        → ALB/Traefik redirects browser to /jaeger/ui/
+User requests /jaeger/ui/*   → ALB/Traefik forwards as-is to jaeger:16686
 ```
 
 ## Understanding the Services
@@ -122,18 +124,18 @@ User requests /grafana/*  → ALB forwards as-is to grafana:80
 |---------|-------------|--------------|---------------|
 | frontend-proxy | `/` | `/` | No change needed |
 | grafana | `/grafana/` | `/grafana` | Already expects sub-path ✅ |
-| jaeger | `/` | `/jaeger` | Needs `/jaeger` stripped ⚠️ |
+| jaeger | `/jaeger/ui/` | `/jaeger` | Redirect to `/jaeger/ui/` ⚠️ |
 
 **Why Grafana works out of the box:**
 - Grafana configured with `root_url: /grafana` in ConfigMap
-- Expects requests like `/grafana/dashboard`
+- Expects requests on `/grafana/` sub-path
 - No rewriting needed
 
-**Why Jaeger needs rewriting:**
-- Jaeger serves on `/` natively
-- User requests `/jaeger/search`
-- Jaeger expects `/search`
-- Must strip `/jaeger` prefix before forwarding
+**Why Jaeger needs a redirect:**
+- Jaeger configured with `base_path: /jaeger/ui` in ConfigMap
+- HTML contains `<base href="/jaeger/ui/">` for React router
+- Browser URL must match `/jaeger/ui/` for React router to work correctly
+- Server-side rewrite is insufficient - browser URL must physically change
 
 ## Directory Structure
 
@@ -141,105 +143,141 @@ User requests /grafana/*  → ALB forwards as-is to grafana:80
 04-path-based-routing/
 ├── README.md
 └── src/
-    ├── albc-ingress-frontend.yaml               # ALBC Ingress for **frontend-proxy**
-    ├── albc-ingress-grafana.yaml                # ALBC Ingress for **grafana**
-    ├── albc-ingress-jaedger.yaml                # ALBC Ingress for **jaeger**
-    ├── albc-multi-path-ingress.yaml             # ALBC Ingress for all 3 services
-    ├── traefik-stripprefix-middleware.yaml      # Traefik Middleware
-    ├── traefik-multi-path-ingress.yaml          # Traefik basic Ingress
-    └── traefik-ingressroute-advanced.yaml       # Traefik IngressRoute (advanced)
-```
-**Note** : `Architecture Decision: Single vs Multiple Ingress Resources`
-
-**Files to use in this demo for albc**
-```
-    ├── albc-ingress-frontend.yaml               # ALBC Ingress for **frontend-proxy**
-    ├── albc-ingress-grafana.yaml                # ALBC Ingress for **grafana**
-    ├── albc-ingress-jaedger.yaml                # ALBC Ingress for **jaeger**
+    ├── albc-ingress-frontend.yaml               # ALBC Ingress for frontend-proxy
+    ├── albc-ingress-grafana.yaml                # ALBC Ingress for grafana
+    ├── albc-ingress-jaeger.yaml                 # ALBC Ingress for jaeger (redirect)
+    ├── albc-multi-path-ingress.yaml             # ALBC single Ingress (reference only)
+    ├── traefik-stripprefix-middleware.yaml      # Traefik redirectRegex Middleware
+    ├── traefik-multi-path-ingress.yaml          # Traefik basic Ingress (reference only)
+    └── traefik-ingressroute-advanced.yaml       # Traefik IngressRoute (use this)
 ```
 
-**Initial Approach (1 Ingress):**
-- All 3 paths in one Ingress resource (`albc-multi-path-ingress.yaml`)
-- **Limitation:** ALB Controller annotations apply globally to entire Ingress
-- Cannot set different health check paths per backend service
+**Files to use in this demo:**
 
-**Final Approach (3 Ingress with group.name):**
-- Separate Ingress per service, each with custom health check path
-- `alb.ingress.kubernetes.io/group.name: multi-service` annotation
-- **Benefit:** All 3 Ingress share the same ALB (single cost)
-- **Flexibility:** Per-service annotations (health checks, timeouts, TLS)
-- **Trade-off:** Slightly more YAML files, but essential for services with different health check requirements.
+| Controller | Files |
+|------------|-------|
+| ALB | `albc-ingress-frontend.yaml`, `albc-ingress-grafana.yaml`, `albc-ingress-jaeger.yaml` |
+| Traefik | `traefik-stripprefix-middleware.yaml`, `traefik-ingressroute-advanced.yaml` |
 
+---
 
 # Demo Instructions
 
 ## Part A: Path-Based Routing with ALB Controller
 
-### Step 0: Understand Grafana Health Check Configuration
+### Step 1: Understand Basic Concepts
 
-**Initial Problem:**
-- Grafana configured with `root_url: /grafana` (expects requests on `/grafana` sub-path)
-- ALB health check defaulted to `/` (root path)
-- Grafana responded with **HTTP 301 Redirect** to `/grafana/`
-- ALB marked target as **Unhealthy** (expected 200, received 301)
+#### Understand Grafana Health Check
 
-**Solution:**
-- Single Ingress cannot have different health check paths per service
-- Split into 3 separate Ingress resources using `group.name` annotation
-- Each Ingress specifies appropriate health check path:
-  - Frontend: `/` (default)
-  - Grafana: `/grafana/`
-  - Jaeger: `/`
-- All 3 share the same ALB (cost-efficient)
+- Grafana serves on `/grafana/` sub-path (`root_url: /grafana` in ConfigMap)
+- ALB health check must use `/grafana/` (not `/`)
+- Single Ingress cannot have different health check paths per service → use 3 separate Ingress with `group.name`
 
-**Result:** All targets now report **Healthy** with correct health check responses.
+#### Understand Jaeger Path Redirect
 
+- Jaeger configured with `base_path: /jaeger/ui` in ConfigMap
+- HTML served with `<base href="/jaeger/ui/">` for React router
+- Browser URL must be `/jaeger/ui/` for React router to work
+- ALB redirect action changes browser URL correctly
 
-### Step 1: Understand ALB Path Matching
+#### Understand ALB Listener Rule Priority 
 
-**1.1 ALB supports multiple path match types:**
+When using AWS Load Balancer Controller with a shared ALB (`alb.ingress.kubernetes.io/group.name`), **listener rule priority determines routing behavior**. ALB evaluates rules in ascending priority order (lowest number first) and stops at the first match.
+
+  **Key Points**
+
+  - ALB does **not** preserve YAML rule order.
+  - Rules are sorted by:
+    1. `alb.ingress.kubernetes.io/group.order`
+    2. Path type (Exact before Prefix)
+    3. Path specificity
+  - A catch-all path (`/` or `/*`) can shadow more specific routes if evaluated first.
+  - Redirect rules must be evaluated before catch-all routes to prevent backend handling.
+
+  **Why `group.order` Was Required**
+
+  In this setup:
+
+  - Multiple Ingress resources share one ALB.
+  - Each service requires a different health check path.
+  - Services cannot be modified (OTel demo managed).
+
+  Therefore, rule priority must be explicitly controlled using:
+
+  ```
+  alb.ingress.kubernetes.io/group.order: "<number>"
+  ```
+
+  Lower number = higher priority.
+
+  `Final Rule Order (Expected)`
+
+  1. **/jaeger** (Exact → Redirect)
+
+  2. **/jaeger/** (Exact → Redirect)
+
+  3. **/jaeger/ui** (Prefix → Forward)
+
+  4. **/grafana** (Prefix → Forward)
+
+  5. **/** (Prefix → Frontend catch-all)
+
+  6. **Default rule**
+
+  Why **/jaeger/ui** Appears After /jaeger, because ALB sorts:
+
+  - Exact path rules before Prefix rules.
+
+  - **/jaeger** and **/jaeger/** are Exact.
+
+  - **/jaeger/ui** is Prefix.
+
+  This ordering is correct and does not cause conflicts because Exact rules do not match subpaths.
+
+####  ALB supports multiple path match types:**
 
 | PathType | Behavior | Example |
 |----------|----------|---------|
-| `Prefix` | Matches prefix + everything after | `/jaeger` matches `/jaeger/search` |
-| `Exact` | Matches exact path only | `/api` matches `/api` but not `/api/v1` |
-
-**1.2 Path priority in ALB:**
-
-When multiple paths could match, ALB uses this order:
-1. Exact matches first
-2. Longer prefixes before shorter ones
-3. `/jaeger/api` evaluated before `/jaeger`
+| `Prefix` | Matches prefix + everything after | `/jaeger/ui` matches `/jaeger/ui/search` |
+| `Exact` | Matches exact path only | `/jaeger` matches `/jaeger` but not `/jaeger/` |
 
 ---
 
 ### Step 2: Create Multi-Path Ingress (ALB)
 
-**2.1 Review the Ingress manifest:**
+**2.1 Files overview:**
 
-Create `albc-ingress-frontend.yaml`:
-Create `albc-ingress-grafana.yaml`:
-Create `albc-ingress-jaedger.yaml`:
+`albc-ingress-frontend.yaml` - Routes `/` to frontend-proxy, health check `/`
 
+`albc-ingress-grafana.yaml` - Routes `/grafana` to grafana, health check `/grafana/`
+
+`albc-ingress-jaeger.yaml` - Two path rules:
+- `/jaeger` and `/jaeger/` (Exact) → redirect action to `/jaeger/ui/`
+- `/jaeger/ui` (Prefix) → forward to jaeger:16686
 
 **Key annotations explained:**
 
-**`alb.ingress.kubernetes.io/group.name: multi-service`**
-- Same group name here makes them to use the same ALB
+`alb.ingress.kubernetes.io/group.name: multi-service`
+- All 3 Ingress resources share the same ALB (single cost)
+- Each can have its own health check path annotation
 
-**`alb.ingress.kubernetes.io/actions.jaeger-rewrite`:**
-- Defines a custom action named `jaeger-rewrite`
-- Forwards to `jaeger:16686` service
-- Strips `/jaeger` prefix via `RewriteConfig`
+`alb.ingress.kubernetes.io/actions.jaeger-redirect`
+- Defines a redirect action
+- Returns HTTP 307 to browser with `Location: /jaeger/ui/`
+- Browser follows redirect → URL changes → React router works
 
-**Backend `service.name: jaeger-rewrite`:**
-- This is NOT a real service
-- It's a reference to the annotation action
-- ALB Controller interprets this as "use the action"
+`alb.ingress.kubernetes.io/group.order`
+- Listener rules priority controlled via group.order
+- Lower number evaluated first
+- Catch-all / must always have highest order number
 
 **2.2 Apply 3 Ingress:**
 
 ```bash
+kubectl apply -f albc-ingress-frontend.yaml
+kubectl apply -f albc-ingress-grafana.yaml
+kubectl apply -f albc-ingress-jaeger.yaml
+(OR)
 ls albc-ingress* | xargs -n 1 kubectl apply -f
 ```
 
@@ -249,7 +287,7 @@ ls albc-ingress* | xargs -n 1 kubectl apply -f
 kubectl get ingress -n otel-demo -w
 ```
 
-**Expected output:**
+**Expected output (all 3 share same ALB DNS):**
 ```
 NAME           CLASS   HOSTS   ADDRESS                                                              PORTS   AGE
 frontend-alb   alb     *       k8s-multiservice-331be209cc-1940602464.us-east-2.elb.amazonaws.com   80      29m
@@ -257,7 +295,9 @@ grafana-alb    alb     *       k8s-multiservice-331be209cc-1940602464.us-east-2.
 jaeger-alb     alb     *       k8s-multiservice-331be209cc-1940602464.us-east-2.elb.amazonaws.com   80      29m
 ```
 
-Wait for ADDRESS field to populate (~2-3 minutes) for all 3 services.All 3 services uses the same ALB
+Wait for ADDRESS field to populate (~2-3 minutes).
+
+**Note:** All 3 Ingress share the same ALB
 
 ---
 
@@ -265,488 +305,343 @@ Wait for ADDRESS field to populate (~2-3 minutes) for all 3 services.All 3 servi
 
 **3.1 Check ALB Listeners**
 
-![alt text](image.png)
+![alt text](images/image-1.png)
 
+**3.2 Check ALB Rules**
 
-**3.2 Check ALB rules**
-
-![alt text](image-1.png)
-
-**Key Observations**
-- you have 3+1 rules ( 3 rules as per your ingress definition + 1 default rules )
------------------------------------------
-|            DescribeRules              |
-+----------+---------------------------+
-| Priority | Path                      |
-+----------+---------------------------+
-|  1       |  /grafana*                |
-|  2       |  /jaeger*                 |
-|  3       |  /*                       |
-|  default | Return Response code: 404 |
-+----------+---------------------------+
-
+![alt text](images/image.png)
 
 **3.3 Check Target Groups**
 
-![alt text](image-2.png)
-
+![alt text](images/image-2.png)
 
 **3.4 Check Resource Map**
 
-![alt text](image-3.png)
+![alt text](images/image-3.png)
 
-**Key Observations**
-- check all the targets are healthy
-
-### Step 3.1: Verify ALB Listener - CLI
-
-**3.1 Get ALB DNS:**
-
-```bash
-ALB_DNS=$(kubectl get ingress multi-path-alb -n otel-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-echo "ALB DNS: $ALB_DNS"
-```
-
-**3.2 Check ALB rules in AWS Console:**
-
-```bash
-# Get ALB ARN
-ALB_ARN=$(aws elbv2 describe-load-balancers \
-  --query "LoadBalancers[?Type=='application' && contains(DNSName, '$(echo $ALB_DNS | cut -d'-' -f1,2)')].LoadBalancerArn" \
-  --output text)
-
-# Get listener ARN (HTTP:80)
-LISTENER_ARN=$(aws elbv2 describe-listeners \
-  --load-balancer-arn $ALB_ARN \
-  --query 'Listeners[?Port==`80`].ListenerArn' \
-  --output text)
-
-# List all rules
-aws elbv2 describe-rules --listener-arn $LISTENER_ARN \
-  --query 'Rules[].{Priority:Priority,Path:Conditions[?Field==`path-pattern`].Values}' \
-  --output table
-```
-
-**Expected output:**
-```
------------------------------------------
-|            DescribeRules              |
-+----------+---------------------------+
-| Priority | Path                      |
-+----------+---------------------------+
-|  1       |  /grafana*                |
-|  2       |  /jaeger*                 |
-|  default |  /*                       |
-+----------+---------------------------+
-```
-
-**3.3 Verify target groups:**
-
-```bash
-aws elbv2 describe-target-groups \
-  --load-balancer-arn $ALB_ARN \
-  --query 'TargetGroups[].{Name:TargetGroupName,Port:Port,Protocol:Protocol}' \
-  --output table
-```
-
-You should see 3 target groups (frontend-proxy, grafana, jaeger).
+**Note:** All targets should show **Healthy**
 
 ---
 
-### Step 4: Test Path Routing
+### Step 4: Test Path Routing (ALB)
 
-**4.1 Get ALB DNS:**
-
-```bash
-ALB_DNS=$(kubectl get ingress frontend-alb -n otel-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-echo "ALB DNS: $ALB_DNS"
+```
+ALB_DNS=$(kubectl get ingress frontend-alb -n otel-demo \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 ```
 
-**4.2 Test frontend (root path):**
-
-```bash
+### Frontend
+```
 curl -I http://$ALB_DNS/
 ```
+**Expected:** HTTP/1.1 200 OK
 
-**Expected:**
+### Grafana
 ```
-HTTP/1.1 200 OK
-Content-Type: text/html
-```
-
-**4.3 Test Grafana:**
-
-```bash
 curl -I http://$ALB_DNS/grafana/
 ```
+**Expected:** HTTP/1.1 200 OK
 
-**Expected:**
+### Jaeger redirect
 ```
-HTTP/1.1 200 OK
-Content-Type: text/html
-```
-
-**In browser:**
-```bash
-echo "Open: http://$ALB_DNS/grafana/"
-```
-
-Should show Grafana dashboards.
-
-**4.4 Test Jaeger:**
-
-```bash
 curl -I http://$ALB_DNS/jaeger/
+&
+curl -I http://$ALB_DNS/jaeger
 ```
+**Expected:** 
 
-**Expected:**
+HTTP/1.1 307 Temporary Redirect
+
+Location: http://.../jaeger/ui/
+
+### Jaeger UI (after redirect)
 ```
-HTTP/1.1 200 OK
-Content-Type: text/html
+curl -I http://$ALB_DNS/jaeger/ui/
 ```
+**Expected:** HTTP/1.1 200 OK
+
+### Jaeger API
+```
+curl -s http://$ALB_DNS/jaeger/ui/api/services
+```
+**Expected:** {"data":["frontend","checkout",...],"errors":null}
+
 
 **In browser:**
-```bash
-echo "Open: http://$ALB_DNS/jaeger/"
-```
-
-Should show Jaeger UI.
-
-**4.5 Test Jaeger search (path rewriting verification):**
-
-```bash
-curl http://$ALB_DNS/jaeger/api/services
-```
-
-**Expected:**
-```json
-{"data":["frontend","cartservice","checkoutservice",...]}
-```
-
-This proves the path rewrite works:
-- User requested: `/jaeger/api/services`
-- ALB stripped `/jaeger`, forwarded: `/api/services`
-- Jaeger responded correctly
-
----
-
-### Step 5: Troubleshooting ALB Path Rewriting
-
-**If Jaeger shows 404 errors:**
-
-**5.1 Check the action annotation syntax:**
-
-```bash
-kubectl get ingress multi-path-alb -n otel-demo -o yaml | grep -A 20 "actions.jaeger-rewrite"
-```
-
-Ensure JSON is valid (no trailing commas, proper brackets).
-
-**5.2 Check ALB Controller logs:**
-
-```bash
-kubectl logs -n kube-system deployment/aws-load-balancer-controller | grep -i "jaeger\|rewrite"
-```
-
-Look for errors in parsing the action.
-
-**5.3 Verify the backend reference:**
-
-The backend must reference the action name:
-```yaml
-backend:
-  service:
-    name: jaeger-rewrite  # Must match annotation name
-    port:
-      name: use-annotation  # Special value
-```
+- `http://$ALB_DNS/` → Frontend app
+- `http://$ALB_DNS/grafana/` → Grafana dashboards
+- `http://$ALB_DNS/jaeger/` → Redirects to `/jaeger/ui/`, shows Jaeger UI
+- `http://$ALB_DNS/jaeger` → Redirects to `/jaeger/ui/`, shows Jaeger UI
 
 ---
 
 ## Part B: Path-Based Routing with Traefik
 
-### Step 6: Understand Traefik Middleware
+### Step 5: Understand Traefik Middleware
 
 Traefik uses **Middleware** CRDs for path manipulation:
 
-**Middleware types:**
-- `StripPrefix` - Removes path prefix
-- `AddPrefix` - Adds path prefix
-- `ReplacePath` - Replaces entire path
-- `RedirectRegex` - Redirects based on regex
+| Middleware | Behaviour |
+|------------|-----------|
+| `stripPrefix` | Removes path prefix (server-side, browser URL unchanged) |
+| `replacePathRegex` | Rewrites path via regex (server-side, browser URL unchanged) |
+| `redirectRegex` | Redirects browser via regex (browser URL changes) |
 
-For Jaeger, we need `StripPrefix` to remove `/jaeger`.
+**Note:** For Jaeger, `redirectRegex` is required because the React router needs the browser URL to be `/jaeger/ui/`.
 
 ---
 
-### Step 7: Create Middleware for Path Stripping
+### Step 6: Apply Middleware and IngressRoute
 
-**7.1 Create the Middleware:**
-
-Create `traefik-stripprefix-middleware.yaml`:
-
-```yaml
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: jaeger-stripprefix
-  namespace: otel-demo
-spec:
-  stripPrefix:
-    prefixes:
-      - /jaeger
-    forceSlash: false
-```
-
-**What this does:**
-- Removes `/jaeger` from the request path
-- `/jaeger/api/services` → `/api/services`
-- `forceSlash: false` - Don't add trailing slash
-
-**7.2 Apply the Middleware:**
+**6.1 Apply Middleware:**
 
 ```bash
 kubectl apply -f traefik-stripprefix-middleware.yaml
-```
-
-**7.3 Verify Middleware created:**
-
-```bash
 kubectl get middleware -n otel-demo
 ```
-
 **Expected:**
 ```
-NAME                  AGE
-jaeger-stripprefix    10s
+NAME              AGE
+jaeger-redirect   10s
 ```
+
+**6.2 Apply IngressRoute:**
+
+```bash
+kubectl apply -f traefik-ingressroute-advanced.yaml
+kubectl get ingressroute -n otel-demo
+```
+**Expected:**
+```
+NAME                 AGE
+multi-path-advanced  10s
+```
+
+**6.3 Verify in Traefik Dashboard & Listener & Rules**
+
+**6.3.1 Check `HTTP Routers`in Traefik Dashboard**
+
+```bash
+kubectl port-forward -n traefik deployment/traefik 9000:9000
+```
+
+Open: `http://localhost:9000/dashboard/`
+
+Navigate to **HTTP → Routers** → click `multi-path-advanced`:
+- 4 routes with correct priorities (1, 10, 15, 20)
+- Middleware `jaeger-redirect` attached to `/jaeger` route only
+- All routes show **Success** status
+
+![alt text](images/image-4.png)
+
 
 ---
 
-### Step 8: Create Multi-Path Ingress (Traefik)
-
-**8.1 Create the Ingress manifest:**
-
-Create `traefik-multi-path-ingress.yaml`:
-
-**Note:** The middleware annotation applies to **ALL paths** in this Ingress. For per-path middleware, use IngressRoute CRD instead (advanced).
-
-**8.2 Apply the Ingress:**
+### Step 7: Test Path Routing (Traefik)
 
 ```bash
-kubectl apply -f traefik-multi-path-ingress.yaml
+TRAEFIK_DNS=$(kubectl get svc traefik -n traefik \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 ```
-
-**8.3 Check Traefik Dashboard:**
-
-```bash
-kubectl port-forward -n traefik svc/traefik 9000:9000
+### Frontend
 ```
-
-Open: http://localhost:9000/dashboard/
-
-**Navigate to HTTP → Routers:**
-- Find `otel-demo-multi-path-traefik-...`
-- Verify 3 paths: `/`, `/grafana`, `/jaeger`
-- Check middleware attached
-
----
-
-### Step 9: Test Traefik Path Routing
-
-**9.1 Get Traefik NLB hostname:**
-
-```bash
-TRAEFIK_DNS=$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-echo "Traefik NLB: $TRAEFIK_DNS"
-```
-
-**9.2 Test frontend:**
-
-```bash
 curl -I http://$TRAEFIK_DNS/
 ```
+**Expected:** HTTP/1.1 200 OK
 
-**9.3 Test Grafana:**
-
-```bash
+### Grafana
+```
 curl -I http://$TRAEFIK_DNS/grafana/
 ```
+**Expected:** HTTP/1.1 200 OK
 
-**9.4 Test Jaeger:**
-
-```bash
+### Jaeger redirect
+```
 curl -I http://$TRAEFIK_DNS/jaeger/
+&
+curl -I http://$TRAEFIK_DNS/jaeger
 ```
+**Expected:** 
 
-**9.5 Test Jaeger API (path stripping verification):**
+HTTP/1.1 307 Temporary Redirect
 
-```bash
-curl http://$TRAEFIK_DNS/jaeger/api/services
+Location: http://.../jaeger/ui/
+
+### Jaeger UI (after redirect)
 ```
-
-Should return service list JSON.
-
----
-
-### Step 10: Advanced - Per-Path Middleware with IngressRoute
-
-For more control, use Traefik's IngressRoute CRD (optional, more advanced):
-
-Create `multi-path-ingressroute.yaml`:
-
-```yaml
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: multi-path-advanced
-  namespace: otel-demo
-spec:
-  entryPoints:
-    - web
-  routes:
-  # Route 1: Frontend (no middleware)
-  - match: PathPrefix(`/`)
-    kind: Rule
-    priority: 1
-    services:
-    - name: frontend-proxy
-      port: 8080
-  
-  # Route 2: Grafana (no middleware)
-  - match: PathPrefix(`/grafana`)
-    kind: Rule
-    priority: 10
-    services:
-    - name: grafana
-      port: 80
-  
-  # Route 3: Jaeger (with middleware)
-  - match: PathPrefix(`/jaeger`)
-    kind: Rule
-    priority: 10
-    middlewares:
-    - name: jaeger-stripprefix
-    services:
-    - name: jaeger
-      port: 16686
+curl -I http://$TRAEFIK_DNS/jaeger/ui/
 ```
+**Expected:** HTTP/1.1 200 OK
 
-**Benefits:**
-- Per-path middleware control
-- Explicit priority ordering
-- More powerful matching rules
+### Jaeger API
+```
+curl -s http://$TRAEFIK_DNS/jaeger/ui/api/services
+```
+**Expected:** {"data":["frontend","checkout",...],"errors":null}
+
+
+**In browser:**
+- `http://$TRAEFIK_DNS/` → Frontend app
+- `http://$TRAEFIK_DNS/grafana/` → Grafana dashboards
+- `http://$TRAEFIK_DNS/jaeger/` → Redirects to `/jaeger/ui/`, shows Jaeger UI
+- `http://$TRAEFIK_DNS/jaeger` → Redirects to `/jaeger/ui/`, shows Jaeger UI
 
 ---
 
 ## Part C: Comparison and Best Practices
 
-### Step 11: Compare ALB vs Traefik Path Handling
+### Step 8: Compare ALB vs Traefik Path Handling
 
 | Aspect | ALB Controller | Traefik |
 |--------|----------------|---------|
-| **Path Rewriting** | JSON annotation (complex) | Middleware CRD (cleaner) |
-| **Configuration** | Annotations in Ingress | Separate Middleware resource |
-| **Flexibility** | Limited to ALB features | Highly extensible |
-| **Debugging** | AWS Console + logs | Traefik Dashboard (visual) |
+| **Path Redirect** | `actions.<n>` annotation with redirect config | `redirectRegex` Middleware CRD |
+| **Configuration** | JSON annotations in Ingress | Separate Middleware resource |
+| **Per-path middleware** | Via separate Ingress + group.name | Native in IngressRoute routes |
+| **Debugging** | AWS Console Resource Map | Traefik Dashboard (visual) |
 | **Performance** | AWS-native (fast) | Extra hop through pod |
 | **Cost** | 1 ALB (~$17/month) | 1 NLB (~$17/month) |
 
 ---
 
-### Step 12: Cost Analysis
-
-**Scenario: Expose 3 services**
+### Step 9: Cost Analysis
 
 | Approach | Load Balancers | Monthly Cost |
 |----------|----------------|--------------|
 | 3 separate Ingress (ALB) | 3 ALBs | ~$50 |
 | 3 separate Ingress (Traefik) | 1 NLB | ~$17 |
-| 1 multi-path Ingress (ALB) | 1 ALB | ~$17 |
-| 1 multi-path Ingress (Traefik) | 1 NLB | ~$17 |
+| 3 Ingress with group.name (ALB) | 1 ALB | ~$17 |
+| IngressRoute (Traefik) | 1 NLB | ~$17 |
 
-**Savings with path-based routing:**
-- ALB: $50 → $17 (66% reduction)
-- Traefik: Already consolidated
-
----
-
-### Step 13: Path Routing Best Practices
-
-**1. Path Priority:**
-- Put more specific paths first
-- Use `Exact` for API endpoints
-- Use `Prefix` for UI routes
-
-**2. Path Rewriting:**
-- Avoid if possible (configure service to expect prefix)
-- Document clearly when required
-- Test thoroughly
-
-**3. Health Checks:**
-- Use root path (`/`) for health checks
-- Don't use rewritten paths for health checks
-
-**4. Path Conflicts:**
-```yaml
-# Bad: Conflicts
-- path: /api
-- path: /api/v1  # Never matches (shadowed by /api)
-
-# Good: Specific first
-- path: /api/v1  # Matches first (more specific)
-- path: /api     # Matches if v1 doesn't
-```
+**Savings with path-based routing + group.name:** $50 → $17 (66% reduction)
 
 ---
 
 ## Validation Checklist
 
-Before proceeding, verify:
-
-- [ ] Multi-path ALB Ingress created and working
-- [ ] All 3 paths accessible via ALB: `/`, `/grafana`, `/jaeger`
-- [ ] Traefik Middleware created
-- [ ] Multi-path Traefik Ingress created and working
-- [ ] All 3 paths accessible via Traefik
-- [ ] Path rewriting works for Jaeger on both
-- [ ] Understand cost savings from consolidation
+- [ ] All 3 ALB Ingress created and share same ALB DNS
+- [ ] All targets Healthy in AWS Console
+- [ ] Frontend `/` returns 200
+- [ ] Grafana `/grafana/` returns 200
+- [ ] Jaeger `/jaeger/` returns 307 → redirects to `/jaeger/ui/`
+- [ ] Jaeger UI loads correctly in browser
+- [ ] Jaeger API `/jaeger/ui/api/services` returns service list JSON
+- [ ] Traefik IngressRoute and Middleware applied
+- [ ] All paths working via Traefik NLB
 
 ---
 
 ## Cleanup
 
-**Remove multi-path Ingress resources:**
-
 ```bash
-kubectl delete ingress multi-path-alb -n otel-demo
-kubectl delete ingress multi-path-traefik -n otel-demo
-kubectl delete middleware jaeger-stripprefix -n otel-demo
-```
+# ALB
+kubectl delete ingress frontend-alb grafana-alb jaeger-alb -n otel-demo
 
-**Verify cleanup:**
-
-```bash
-kubectl get ingress -n otel-demo
-kubectl get middleware -n otel-demo
+# Traefik
+kubectl delete ingressroute multi-path-advanced -n otel-demo
+kubectl delete middleware jaeger-redirect -n otel-demo
 ```
 
 ---
 
 ## What You Learned
 
-In this demo, you:
-- ✅ Created multi-path Ingress resources consolidating 3 services
-- ✅ Implemented path-based routing with both ALB and Traefik
-- ✅ Handled path rewriting for services that don't expect the prefix
-- ✅ Compared path manipulation approaches (annotations vs Middleware)
-- ✅ Understood 66% cost savings from consolidation
-- ✅ Learned best practices for path priority and conflicts
+- ✅ Created multi-path routing consolidating 3 services behind 1 load balancer
+- ✅ Used `group.name` annotation to share 1 ALB across multiple Ingress resources
+- ✅ Understood why per-service health check paths require separate Ingress resources
+- ✅ Understood why Jaeger needs a redirect (not rewrite) due to React router + base_path
+- ✅ Compared ALB redirect actions vs Traefik redirectRegex Middleware
+- ✅ Achieved 66% cost reduction via path-based routing
 
-**Key Insight:**
-Path-based routing is **essential for cost optimization** when exposing multiple services. Both controllers support it, but with different mechanisms:
-- **ALB:** Annotations (tightly coupled, AWS-specific)
-- **Traefik:** Middleware CRDs (reusable, portable)
+---
+
+## Lessons Learned
+
+This section captures how the configuration evolved through troubleshooting.
+
+### L1: Single Ingress → 3 Separate Ingress (ALB)
+
+**Problem:** Single Ingress with all 3 paths → Grafana unhealthy (HTTP 301 on health check)
+
+**Why:** ALB health check annotation applies globally. Grafana needs `/grafana/` health check, frontend needs `/`. Cannot set per-service health check in one Ingress.
+
+**Fix:** Split into 3 Ingress resources using `alb.ingress.kubernetes.io/group.name: multi-service`. All 3 share 1 ALB but each has independent annotations.
+
+---
+
+### L2: Grafana Port 1 Bug
+
+**Problem:** ALB Target Group registered Grafana on port 1 (unhealthy)
+
+**Why:** Ingress specified service port `80`. Grafana service uses named targetPort `grafana` → port `3000`. ALB Controller failed to resolve named port with `target-type: ip`.
+
+**Fix:** Specify actual service port `80` explicitly (not named port) or pod port `3000` directly.
+
+---
+
+### L3: Jaeger Path - Server Rewrite vs Browser Redirect
+
+**Problem:** Multiple middleware approaches failed (`stripPrefix`, `replacePathRegex`, ALB `RewriteConfig`)
+
+**Root Cause (discovered via browser DevTools):**
+- Jaeger HTML contains `<base href="/jaeger/ui/">`
+- React router checks browser URL against base href
+- Server-side rewrite changes path sent to Jaeger but **browser URL stays `/jaeger/`**
+- Mismatch between browser URL `/jaeger/` and base href `/jaeger/ui/` → React shows "Page not found"
+
+**Fix:** Use **browser redirect** (307) → browser URL physically changes to `/jaeger/ui/` → React router matches → UI loads correctly.
+
+| Approach | Browser URL | Result |
+|----------|-------------|--------|
+| `replacePathRegex` | stays `/jaeger/` | ❌ React mismatch |
+| `redirectRegex` / ALB redirect | changes to `/jaeger/ui/` | ✅ Works |
+
+---
+
+### L4: IngressRoute Routes Required for Traefik
+
+**Problem:** Single route `PathPrefix(/jaeger)` with redirect middleware → after redirect to `/jaeger/ui/`, no route matched → blank page
+
+**Fix:** Two separate routes needed:
+- `Path(/jaeger) || Path(/jaeger/)` with `redirectRegex` middleware (priority 20)
+- `PathPrefix(/jaeger/ui)` without middleware, forward as-is (priority 15)
+
+---
+
+## Troubleshooting
+
+**Grafana target unhealthy:**
+```bash
+# Verify health check path annotation
+kubectl get ingress grafana-alb -n otel-demo -o yaml | grep healthcheck-path
+# Expected: /grafana/
+```
+
+**Jaeger shows blank page:**
+```bash
+# Check redirect is happening (must be 307, not 200)
+curl -I http://$ALB_DNS/jaeger/
+# Must see: HTTP/1.1 307 Temporary Redirect
+#           Location: .../jaeger/ui/
+
+# If 200 (no redirect), check action annotation
+kubectl get ingress jaeger-alb -n otel-demo -o yaml | grep -A 10 actions
+```
+
+**Traefik Jaeger blank page:**
+```bash
+# Verify middleware type is redirectRegex (not replacePathRegex)
+kubectl get middleware jaeger-redirect -n otel-demo -o yaml | grep -A 5 spec
+```
+
+**Path conflicts (wrong service responding):**
+```bash
+# Check ALB rule priorities
+aws elbv2 describe-rules --listener-arn $LISTENER_ARN --output table
+
+# Check Traefik route priorities
+# Dashboard → HTTP → Routers → check Priority column
+kubectl port-forward -n traefik svc/traefik 9000:9000
+```
 
 ---
 
@@ -754,40 +649,5 @@ Path-based routing is **essential for cost optimization** when exposing multiple
 
 **Demo 1.5: Host-Based Routing**
 - Route different hostnames to different services
-- Use custom domains (frontend.example.com, jaeger.example.com)
+- Use custom domains (`frontend.example.com`, `jaeger.example.com`)
 - Combine host + path routing
-
----
-
-## Troubleshooting
-
-**Jaeger 404 on ALB:**
-```bash
-# Check action annotation
-kubectl describe ingress multi-path-alb -n otel-demo | grep -A 10 actions
-
-# Verify JSON is valid
-kubectl get ingress multi-path-alb -n otel-demo -o jsonpath='{.metadata.annotations}' | jq
-```
-
-**Traefik path not stripping:**
-```bash
-# Check middleware exists
-kubectl get middleware jaeger-stripprefix -n otel-demo
-
-# Check Traefik logs
-kubectl logs -n traefik deployment/traefik | grep -i middleware
-
-# Verify annotation references correct middleware
-kubectl get ingress multi-path-traefik -n otel-demo -o yaml | grep middlewares
-```
-
-**Path conflicts (wrong service responding):**
-```bash
-# Check path priority in ALB rules
-aws elbv2 describe-rules --listener-arn $LISTENER_ARN
-
-# Check Traefik router priorities
-kubectl port-forward -n traefik svc/traefik 9000:9000
-# Dashboard → HTTP → Routers → Check Priority values
-```
