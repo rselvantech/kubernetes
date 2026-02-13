@@ -241,6 +241,59 @@ When using AWS Load Balancer Controller with a shared ALB (`alb.ingress.kubernet
 | `Prefix` | Matches prefix + everything after | `/jaeger/ui` matches `/jaeger/ui/search` |
 | `Exact` | Matches exact path only | `/jaeger` matches `/jaeger` but not `/jaeger/` |
 
+
+#### Understand Traefik IngressRoute Rule Priority
+
+When using Traefik's IngressRoute CRD, **route priority determines which rule matches first**. Unlike ALB which evaluates rules in ascending numeric order (lowest first), Traefik evaluates routes in **descending priority order (highest number first)**.
+
+**Key Points**
+
+- Traefik does **not** use declaration order in YAML to determine priority.
+- Priority is controlled by the explicit `priority` field on each route.
+- If `priority` is not set, Traefik auto-calculates it based on rule character length — longer rules get higher priority. This is **unpredictable** for complex rules and should not be relied on.
+- A catch-all route (`PathPrefix('/')`) will shadow all other routes if given a higher priority number.
+- Redirect middleware must be on a higher priority route than the forward route to ensure correct browser URL behavior.
+
+**Why Explicit `priority` Was Required**
+
+In this setup:
+
+- A single IngressRoute contains routes for frontend, grafana, and jaeger.
+- Jaeger requires two separate routes: one for redirect (`/jaeger`, `/jaeger/`) and one for forwarding (`/jaeger/ui/*`).
+- The catch-all frontend route (`/`) must be evaluated **last**.
+- Without explicit priority, Traefik's auto-calculation could match `/jaeger/ui` before the redirect rule or match frontend catch-all first.
+
+Therefore, priority must be explicitly set on every route:
+
+```yaml
+priority: <number>   # higher number = evaluated first
+```
+
+Higher number = higher priority. *(Opposite of ALB)*
+
+**Final Route Priority Order (Expected)**
+
+1. **/jaeger** and **/jaeger/** `priority: 20` (Exact Path match → Redirect to `/jaeger/ui/`)
+2. **/jaeger/ui** `priority: 15` (Prefix → Forward to Jaeger)
+3. **/grafana** `priority: 10` (Prefix → Forward to Grafana)
+4. **/** `priority: 1` (Prefix → Frontend catch-all, evaluated last)
+
+**Why `/jaeger/ui` appears after `/jaeger` redirect routes:**
+
+- `Path('/jaeger') || Path('/jaeger/')` has priority 20 — evaluated first, sends browser redirect.
+- `PathPrefix('/jaeger/ui')` has priority 15 — evaluated second, forwards UI/API/static asset requests as-is.
+- This ordering is correct because `Path()` (exact) does not match `/jaeger/ui/*` subpaths, so there is no conflict.
+
+#### Compare: ALB vs Traefik Priority
+
+| Aspect | ALB | Traefik |
+|--------|-----|---------|
+| **Higher priority** | Lower number wins | Higher number wins |
+| **Mechanism** | `group.order` annotation per Ingress | `priority` field per route |
+| **Scope** | Across multiple Ingress files | Within single IngressRoute |
+| **Default behavior** | Unpredictable without `group.order` | Unpredictable without `priority` |
+| **Catch-all** | Highest `group.order` number (evaluated last) | Lowest `priority` number (evaluated last) |
+
 ---
 
 ### Step 2: Create Multi-Path Ingress (ALB)
