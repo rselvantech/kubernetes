@@ -128,6 +128,9 @@ By the end of this demo, you will:
 
 ## Concepts
 
+### DNS cache awareness
+Before testing subdomain access in the browser, ensure your DNS cache is clean — especially if you have previously attempted to access a subdomain before its Route53 record was created. A stale negative cache (NXDOMAIN) at the OS or browser level will prevent resolution even after the record exists in Route53.
+
 ### Host-Based Routing vs Path-Based Routing
 
 | | Path-Based (Demo-04) | Host-Based (Demo-05) |
@@ -788,7 +791,7 @@ dig +short jaeger.rselvantech.com
 
 **Note:** 
 - Each returns IP addresses (ALB IPs).
-- If any does not retunr IP, Check **Troubleshooting** section for more info on troubleshooting this
+- If any does not return IP, Check **Troubleshooting** section for more info to troubleshoot
 
 
 **Test frontend:**
@@ -977,8 +980,8 @@ dig +short jaeger.rselvantech.com
 ```
 
 **Note:** 
-- Each returns IP addresses (ALB IPs).
-- If any does not retunr IP, Check **Troubleshooting** section for more info on troubleshooting this
+- Each returns IP addresses (NLB IPs).
+- If any does not return IPs, Check **Troubleshooting** section for more info to troubleshoot
 
 ```bash
 curl -v http://grafana.rselvantech.com/ 2>&1 | grep -i "location"
@@ -1096,8 +1099,8 @@ Before proceeding, verify:
 
 ```bash
 # Remove Ingress — external-dns auto-deletes Route53 records
-kubectl delete -f src/albc-ingress-host-based.yaml
-kubectl delete -f src/traefik-ingressroute-host-based.yaml
+kubectl delete -f albc-ingress-host-based.yaml
+kubectl delete -f traefik-ingressroute-host-based.yaml
 
 # Remove Traefik service annotation
 kubectl annotate service traefik -n traefik \
@@ -1211,6 +1214,35 @@ With `policy: sync`, deleting the Ingress triggers external-dns to delete the co
 
 ---
 
+### 5. external-dns Ownership Transfer — Annotate Before Deleting
+
+**Observation:** After annotating the Traefik Service and then deleting the ALB Ingress, external-dns did not delete the Route53 records — it updated them to point to the NLB instead.
+
+**Why:** When the ALB Ingress was deleted, external-dns checked whether any other source still claimed those subdomains. The Traefik Service annotation was already present claiming the same hostnames. Instead of deleting, external-dns transferred ownership and updated the A records to the NLB hostname in a single reconciliation cycle — with no deletion gap.
+
+**Contrast — if you delete ALB Ingress first, then annotate Traefik Service:**
+```
+Delete ALB Ingress → external-dns DELETES records → DNS gap (~1-2 min)
+Annotate Traefik Service → external-dns CREATES records → DNS restored
+```
+
+**Recommended switch order — annotate first, then delete:**
+```
+Annotate Traefik Service → external-dns sees conflict, waits
+Delete ALB Ingress → external-dns TRANSFERS ownership → updates records to NLB
+No DNS gap ✅
+```
+
+**Rule:** When switching between ALB and Traefik, annotate the new controller's resource first before removing the old one. external-dns handles the transfer atomically with no period where DNS records are missing.
+
+### 5. ALB and Traefik Cannot Own the Same Subdomains Simultaneously
+
+**Observation:** After annotating the Traefik Service while the ALB Ingress was still active, external-dns logged All records are already up to date and made no changes. DNS continued pointing to the ALB — Traefik received no traffic despite the annotation being correctly applied.
+
+**Why:** external-dns uses TXT ownership records to track which resource owns each DNS record. When the ALB Ingress created the records, it became the owner (tracked via TXT). The Traefik Service annotation requests the same subdomains but external-dns will not overwrite records owned by a different source — it reports them as already up to date.
+
+**Rule:** Always clean up one controller's Ingress/annotation before activating the other. They cannot share subdomains simultaneously. The recommended order is annotate new → delete old (as per Lesson 5 above) to avoid any DNS gap during the switch.
+
 ## Next Steps
 
 **Demo-06: TLS / HTTPS**
@@ -1234,6 +1266,7 @@ kubectl exec -n otel-demo deployment/grafana -- \
   cat /etc/grafana/grafana.ini | grep -A5 "\[server\]"
 # If domain is still empty, reinstall with correct values file
 ```
+---
 
 **external-dns not creating Route53 records:**
 ```bash
@@ -1244,6 +1277,8 @@ kubectl get sa external-dns -n external-dns -o yaml | grep role-arn
 kubectl logs -n external-dns -l app.kubernetes.io/name=external-dns | grep -i "error\|denied"
 ```
 
+---
+
 **DNS not resolving after records created:**
 ```bash
 # Verify records exist
@@ -1252,6 +1287,7 @@ aws route53 list-resource-record-sets --hosted-zone-id $ZONE_ID
 # Check from public resolver (propagation takes 1-5 min)
 dig @8.8.8.8 grafana.rselvantech.com
 ```
+---
 
 **Wrong service responding:**
 ```bash
@@ -1261,6 +1297,7 @@ curl -H "Host: grafana.rselvantech.com" http://$ALB_DNS/
 # Check ALB rules show host-header conditions
 aws elbv2 describe-rules --listener-arn $LISTENER_ARN --output table
 ```
+---
 
 **Traefik returns 404:**
 ```bash
@@ -1270,6 +1307,8 @@ kubectl get ingressroute -n otel-demo
 # Check Traefik picked up the routes
 kubectl logs -n traefik deployment/traefik | grep -i "grafana\|jaeger\|app"
 ```
+---
+
 **DNS Cache Issues (Stale Negative Cache):**
 
 **Symptom:** `dig +short grafana.rselvantech.com` returns nothing even though the record exists in Route53 and other subdomains resolve fine.
@@ -1299,3 +1338,18 @@ If this returns IPs — the record is correct in Route53. The issue is cache onl
 #For Linux:
 sudo resolvectl flush-caches
 ```
+
+**Step 3 — Recommend to use Google public DNS directly**
+```bash
+#For Linux:
+sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf'
+```
+
+**Step 4 — Flush browser DNS cache:**
+
+Even after OS cache is cleared, the browser maintains its own independent DNS cache.
+
+**Chrome:**
+```
+chrome://net-internals/#dns  → Clear host cache
+chrome://net-internals/#sockets  → Flush socket pools
