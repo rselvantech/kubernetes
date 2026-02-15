@@ -327,6 +327,8 @@ Higher number = higher priority. *(Opposite of ALB)*
 **2.2 Apply 3 Ingress:**
 
 ```bash
+cd 04-path-based-routing/src
+
 kubectl apply -f albc-ingress-frontend.yaml
 kubectl apply -f albc-ingress-grafana.yaml
 kubectl apply -f albc-ingress-jaeger.yaml

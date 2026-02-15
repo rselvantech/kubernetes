@@ -143,6 +143,8 @@ Create `frontend-alb-ingress.yaml`:
 **2.2 Apply the Ingress:**
 
 ```bash
+cd 03-expose-frontend/src
+
 kubectl apply -f frontend-alb-ingress.yaml
 ```
 
