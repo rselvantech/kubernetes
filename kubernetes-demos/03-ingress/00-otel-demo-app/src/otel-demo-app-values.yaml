@@ -1,5 +1,6 @@
 # OpenTelemetry Demo - Minimal Configuration for Ingress Learning
 # This configuration enables only essential services needed for Kubernetes Ingress scenarios
+# Tested with: open-telemetry/opentelemetry-demo chart version 0.40.2 (app version 2.2.0)
 
 default:
   envOverrides: []

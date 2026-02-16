@@ -481,6 +481,7 @@ Reinstall with updated values file:
 cd 05-host-based-routing/src
 
 helm install otel-demo open-telemetry/opentelemetry-demo \
+  --version 0.40.2 \
   --namespace otel-demo \
   --create-namespace \
   --values otel-demo-app-values.yaml

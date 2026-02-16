@@ -265,7 +265,9 @@ kubectl create namespace otel-demo
 
 ```bash
 helm install otel-demo open-telemetry/opentelemetry-demo \
+  --version 0.40.2 \
   --namespace otel-demo \
+  --create-namespace \
   --values otel-demo-app-values.yaml
 ```
 

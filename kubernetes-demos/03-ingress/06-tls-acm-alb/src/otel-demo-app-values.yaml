@@ -221,7 +221,7 @@ grafana:
   grafana.ini:
     server:
       domain: grafana.rselvantech.com
-      root_url: "http://grafana.rselvantech.com/grafana"
+      root_url: "https://grafana.rselvantech.com/grafana"
       serve_from_sub_path: true
 
 # Prometheus - Metrics collection and storage

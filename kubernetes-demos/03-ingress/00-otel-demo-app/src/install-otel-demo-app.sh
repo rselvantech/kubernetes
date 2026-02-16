@@ -115,8 +115,10 @@ install_demo() {
     echo ""
 
     helm install "$RELEASE_NAME" open-telemetry/$CHART_NAME \
+        --version 0.40.2 \
         --namespace "$NAMESPACE" \
         --values "$VALUES_FILE"
+
 
     print_success "Installation complete!"
 }
