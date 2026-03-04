@@ -553,7 +553,10 @@ echo "Policy ARN: $POLICY_ARN"
 ### Step 5: Create IRSA (IAM Role for Service Account)
 
 ```bash
+# Get Cluster name 
 eksctl get cluster
+
+# export CLUSTER_NAME 
 export CLUSTER_NAME=<your-cluster-name>
 # export AWS_REGION=<your-region> 
 
@@ -591,6 +594,8 @@ eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/eksctl-...
 ---
 
 ### Step 6: Install external-dns via Helm
+
+**App Version: v0.20.0** 
 
 ```bash
 helm repo add external-dns https://kubernetes-sigs.github.io/external-dns/

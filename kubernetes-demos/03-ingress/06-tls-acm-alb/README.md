@@ -20,12 +20,14 @@ The ALB terminates TLS at the edge. Traffic inside the cluster between ALB and p
 **From Previous Demos:**
 - ✅ Completed `00-otel-demo-app` — EKS Cluster and OTel Demo running
 - ✅ Completed `01-aws-alb-controller` — ALB Controller installed
-- ✅ Completed `05-host-based-routing` - hostbased routing understanding ( perform Demo-05 cleanup , before starting this demo)
+- ✅ Completed `05-host-based-routing` - hostbased routing understanding 
 
 **New prerequisite for this demo: (As like for Demo-05)** 
 - ✅ Domain `rselvantech.com` registered in Route53
 - ✅ Hosted zone auto-created by Route53 at registration
+- ✅ Email verification done  (ICANN requirement, within 15 days)
 
+**Perform Demo-05 cleanup before starting this demo.**
 
 **Verify Prerequisites:**
 
