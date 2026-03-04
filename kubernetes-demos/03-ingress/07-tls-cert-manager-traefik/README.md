@@ -194,7 +194,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: wildcard-rselvantech-prod
-  namespace: traefik          # must be same namespace as Traefik
+  namespace: otel-demo         # must be same namespace as IngressRoute
 spec:
   secretName: wildcard-rselvantech-prod-tls   # cert stored here
   issuerRef:
@@ -376,8 +376,8 @@ Follow [Demo-05: Host-Based Routing — Part A: Install external-dns](../05-host
 
 > [!NOTE]
 > Demo-07 uses a component-grouped directory structure. When following Demo-05 instructions, use these file paths:
-> - IAM Policy: `external-dns/iam-policy.json`
-> - Helm Values: `external-dns/values.yaml`
+> - IAM Policy: `external-dns/external-dns-iam-policy.json`
+> - Helm Values: `external-dns/external-dns-values.yaml`
 
 After installation, **annotate the Traefik Service** so external-dns manages DNS records pointing to the NLB:
 
@@ -497,7 +497,7 @@ arn:aws:iam::123456789012:role/eksctl-your-cluster-addon-iamserviceaccount...
 
 ### Step 6: Install cert-manager via Helm
 
-**App Version: v1.19.4** — current LTS (Long Term Support) release.
+**App Version: v1.19.4** — current stable release.
 
 ```bash
 helm repo add jetstack https://charts.jetstack.io
@@ -533,7 +533,7 @@ Three pods:
 
 ### Step 7: Understanding cert-manager Helm Values
 
-Review `src/cert-manager-values.yaml` key parameters:
+Review `src/cert-manager/cert-manager-values.yaml` key parameters:
 
 **`crds.enabled: true`**
 Installs cert-manager Custom Resource Definitions (Certificate, ClusterIssuer, Issuer, CertificateRequest, Order, Challenge) as part of the Helm release. Without this, CRDs must be installed separately before the chart. This is the recommended approach since cert-manager v1.15.
@@ -558,8 +558,8 @@ echo "Zone ID: $ZONE_ID"
 ```
 
 > [!NOTE]
-> Edit `cert-manager/clusterissuer-staging.yaml` file. In below line replace capture your above `Zone ID`
->            `hostedZoneID: REPLACE_WITH_YOUR_ZONE_ID`
+> Edit `cert-manager/clusterissuer-staging.yaml` file. In below line replace with your Zone ID from above:
+> `hostedZoneID: REPLACE_WITH_YOUR_ZONE_ID`
 
 
 ```bash
@@ -600,7 +600,7 @@ kubectl apply -f cert-manager/certificate-staging.yaml
 **Watch certificate status:**
 
 ```bash
-kubectl get certificate -n traefik -w
+kubectl get certificate -n otel-demo -w
 ```
 
 **Expected progression:**
@@ -633,23 +633,23 @@ Cleaning up TXT record _acme-challenge.rselvantech.com
 **Check order status**
 
 ```bash
-kubectl get order -n traefik
+kubectl get order -n otel-demo
 ```
 
 **Expected output**
 ```
 NAME                                    STATE     AGE
-wildcard-rselvantech-stg-1-2300723576   pending   21m        #If all challenges succeeds, state changes to 'valid' 
+wildcard-rselvantech-stg-1-2300723576   pending   21m        #If all challenges succeed, state changes to 'valid' 
 ```
 
 **Check challenge status (visible during validation):**
 
 > [!NOTE]
-> Once all challenges transition to `valid` state, below challenge records will be removed and 
-> above order record will move to 'valid' state 
+> Once all challenges transition to `valid` state, challenge records will be removed and 
+> the order record will move to 'valid' state 
 
 ```bash
-kubectl get challenges -n traefik
+kubectl get challenges -n otel-demo
 ```
 
 **Expected output**
@@ -660,10 +660,10 @@ wildcard-rselvantech-stg-1-2300723576-1251074652   pending   rselvantech.com   2
 ```
 
 
-**if any challenges are pending - Check status and events**
+**If any challenges are pending - Check status and events**
 
 ```bash
-kubectl describe challenge -n traefik  # if any challenges are pending
+kubectl describe challenge -n otel-demo
 ```
 
 **Verify TXT record cleanup (should be empty after validation):**
@@ -691,7 +691,7 @@ kubectl apply -f cert-manager/certificate-production.yaml
 **Watch production certificate:**
 
 ```bash
-kubectl get certificate -n traefik -w
+kubectl get certificate -n otel-demo -w
 ```
 
 **Expected:**
@@ -701,10 +701,10 @@ wildcard-rselvantech-stg    True    wildcard-rselvantech-stg      5m
 wildcard-rselvantech-prod   True    wildcard-rselvantech-prod-tls 2m
 ```
 
-**Verify Secret created in traefik namespace:**
+**Verify Secret created in otel-demo namespace:**
 
 ```bash
-kubectl get secret wildcard-rselvantech-prod-tls -n traefik
+kubectl get secret wildcard-rselvantech-prod-tls -n otel-demo
 ```
 
 **Expected:**
@@ -727,7 +727,7 @@ wildcard-rselvantech-prod-tls  kubernetes.io/tls   2      2m
 |---|---|---|
 | Redirect config | `ssl-redirect: "443"` annotation | Explicit `Middleware` resource |
 | How it works | ALB Controller creates redirect rule | Traefik applies Middleware to all HTTP routes |
-| Resource type | Annotation (no separate resource) | `Middleware` CRD in traefik namespace |
+| Resource type | Annotation (no separate resource) | `Middleware` CRD in otel-demo namespace |
 
 **Traefik redirect Middleware:**
 
@@ -736,11 +736,11 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: https-redirect
-  namespace: traefik
+  namespace: otel-demo    # Same namespace as IngressRoute
 spec:
   redirectScheme:
     scheme: https
-    permanent: true    # HTTP 301
+    permanent: true    # HTTP 308 or 301
 ```
 
 **Two IngressRoutes per service:**
@@ -757,9 +757,15 @@ IngressRoute on websecure (port 443):
   → routes to backend services
 ```
 
-**Why the Certificate must be in the `traefik` namespace:**
+**Why the Certificate and IngressRoute must be in the same namespace:**
 
-Kubernetes Secrets are namespace-scoped. Traefik reads the Secret referenced in `tls.secretName`. Traefik can only access Secrets in its own namespace (`traefik`). If the Certificate is created in `otel-demo` namespace, the Secret is there — Traefik cannot read it and HTTPS fails. The Certificate resource must always be created in the `traefik` namespace.
+Kubernetes Secrets are namespace-scoped. Traefik reads the Secret referenced in `tls.secretName`. Traefik can only access Secrets in the **same namespace as the IngressRoute**. If the Certificate is created in `traefik` namespace but IngressRoute is in `otel-demo` namespace, Traefik cannot read the Secret and serves its default self-signed certificate.
+
+**Correct setup:**
+- Certificate in `otel-demo` namespace
+- IngressRoute in `otel-demo` namespace
+- Secret auto-created by cert-manager in `otel-demo` namespace
+- Traefik reads Secret successfully ✅
 
 ---
 
@@ -772,7 +778,7 @@ kubectl apply -f traefik/traefik-middleware-https-redirect.yaml
 **Verify:**
 
 ```bash
-kubectl get middleware -n traefik
+kubectl get middleware -n otel-demo
 ```
 
 **Expected:**
@@ -814,11 +820,12 @@ Open http://localhost:9000/dashboard/ → HTTP → Routers
 
 Verify both `web` (HTTP redirect) and `websecure` (HTTPS) routers appear for all three hosts.
 
-![alt text](images/image.png)
+![Traefik Dashboard - HTTP Routers](images/image.png)
 
-![alt text](images/image-1.png)
+![Traefik Dashboard - HTTPS Routers](images/image-1.png)
 
-![alt text](images/image-2.png)
+![Traefik Dashboard - Services](images/image-2.png)
+
 ---
 
 ### Step 14: Test HTTPS Access
@@ -831,7 +838,7 @@ curl -I http://app.rselvantech.com/
 
 **Expected:**
 ```
-HTTP/1.1 301 Moved Permanently
+HTTP/1.1 308 Permanent Redirect
 Location: https://app.rselvantech.com/
 ```
 
@@ -843,7 +850,7 @@ curl -I https://app.rselvantech.com/
 
 **Expected:**
 ```
-HTTP/1.1 200 OK
+HTTP/2 200 OK
 ```
 
 **Verify certificate is from Let's Encrypt (not staging fake CA):**
@@ -871,7 +878,7 @@ curl -v https://grafana.rselvantech.com/ 2>&1 | grep -E "issuer|location|HTTP/"
 
 **Expected:**
 ```
-issuer: C=US; O=Let's Encrypt; CN=R10
+issuer: C=US; O=Let's Encrypt; CN=R12
 < HTTP/2 301
 < location: https://grafana.rselvantech.com/grafana/
 ```
@@ -884,7 +891,7 @@ curl -I https://jaeger.rselvantech.com/
 
 **Expected:**
 ```
-HTTP/1.1 200 OK
+HTTP/2 200 OK
 ```
 
 **Verify in browser:**
@@ -897,7 +904,7 @@ https://jaeger.rselvantech.com    → Jaeger UI (padlock — Let's Encrypt)
 
 Click padlock → Certificate → Issued by: **Let's Encrypt R12** (not Amazon).
 
-![alt text](images/image-3.png)
+![Browser Certificate Verification](images/image-3.png)
 
 ---
 
@@ -943,9 +950,9 @@ Before proceeding, verify:
 - [ ] Staging certificate `READY = True` (proves DNS-01 + IRSA + Route53 work)
 - [ ] Production ClusterIssuer `READY = True`
 - [ ] Production certificate `READY = True`
-- [ ] Secret `wildcard-rselvantech-prod-tls` exists in `traefik` namespace
-- [ ] Traefik Middleware `https-redirect` created
-- [ ] `curl -I http://app.rselvantech.com/` returns `301 Location: https://...`
+- [ ] Secret `wildcard-rselvantech-prod-tls` exists in `otel-demo` namespace
+- [ ] Traefik Middleware `https-redirect` created in `otel-demo` namespace
+- [ ] `curl -I http://app.rselvantech.com/` returns `308 Location: https://...`
 - [ ] `curl -I https://app.rselvantech.com/` returns `200 OK`
 - [ ] Certificate issuer shows `Let's Encrypt` (not Amazon or staging fake CA)
 - [ ] All three subdomains show padlock in browser
@@ -956,14 +963,14 @@ Before proceeding, verify:
 
 ```bash
 # Remove Traefik IngressRoutes and Middleware
-kubectl delete -f src/traefik-ingressroute-https.yaml
-kubectl delete -f src/traefik-middleware-https-redirect.yaml
+kubectl delete -f traefik/traefik-ingressroute-https.yaml
+kubectl delete -f traefik/traefik-middleware-https-redirect.yaml
 
 # Remove Certificates and ClusterIssuers
-kubectl delete -f src/certificate-production.yaml
-kubectl delete -f src/certificate-staging.yaml
-kubectl delete -f src/clusterissuer-production.yaml
-kubectl delete -f src/clusterissuer-staging.yaml
+kubectl delete -f cert-manager/certificate-production.yaml
+kubectl delete -f cert-manager/certificate-staging.yaml
+kubectl delete -f cert-manager/clusterissuer-production.yaml
+kubectl delete -f cert-manager/clusterissuer-staging.yaml
 
 # Uninstall cert-manager
 helm uninstall cert-manager -n cert-manager
@@ -991,14 +998,14 @@ eksctl delete iamserviceaccount \
   --namespace external-dns \
   --name external-dns
 
-aws iam delete-policy --policy-arn $POLICY_ARN
+aws iam delete-policy --policy-arn $EXTERNAL_DNS_POLICY_ARN
 ```
 
 **Verify cleanup:**
 
 ```bash
 kubectl get pods -n cert-manager        # namespace gone
-kubectl get certificate -n traefik      # certificates gone
+kubectl get certificate -n otel-demo    # certificates gone
 kubectl get ingressroute -n otel-demo   # routes gone
 kubectl get pods -n external-dns        # namespace gone
 ```
@@ -1031,23 +1038,41 @@ Let's Encrypt production enforces strict rate limits — 50 certificates per dom
 
 **Rule:** Staging cert `READY = True` → then and only then switch to production.
 
+---
+
 ### 2. cert-manager Requires `--issuer-ambient-credentials` for IRSA
 
 IRSA correctly annotates the ServiceAccount and projects the token into the pod — but cert-manager does not use ambient AWS credentials by default. Without `--issuer-ambient-credentials=true` in `extraArgs`, cert-manager ignores the IRSA token entirely and Route53 calls fail silently with `NoCredentialProviders`. This is the most common cert-manager + IRSA failure.
 
 **Rule:** Always set `extraArgs: ["--issuer-ambient-credentials=true"]` in cert-manager Helm values when using IRSA.
 
-### 3. Certificate Must Be in the Same Namespace as Traefik
+---
 
-cert-manager creates a Kubernetes Secret from the Certificate resource in the same namespace as the Certificate. Traefik reads Secrets referenced in `tls.secretName` but only from its own namespace (`traefik`). Creating Certificate in `otel-demo` or `default` namespace puts the Secret in the wrong namespace — Traefik cannot access it and HTTPS fails.
+### 3. Certificate and IngressRoute Must Be in the Same Namespace
 
-**Rule:** Always create Certificate resources in the `traefik` namespace.
+cert-manager creates a Kubernetes Secret from the Certificate resource in the same namespace as the Certificate. Traefik reads Secrets referenced in `tls.secretName` but only from the **same namespace as the IngressRoute**.
+
+**Wrong:**
+- Certificate in `traefik` namespace
+- IngressRoute in `otel-demo` namespace
+- Result: Traefik serves default self-signed certificate ❌
+
+**Correct:**
+- Certificate in `otel-demo` namespace
+- IngressRoute in `otel-demo` namespace  
+- Result: Traefik serves Let's Encrypt certificate ✅
+
+**Rule:** Always create Certificate resources in the same namespace as the IngressRoute that references them.
+
+---
 
 ### 4. Use `tls.secretName` in IngressRoute — Not `cert-manager.io/cluster-issuer` Annotation
 
 The `cert-manager.io/cluster-issuer` annotation on Kubernetes Ingress resources triggers cert-manager to auto-request a certificate. This does **not** work on Traefik IngressRoute CRDs — cert-manager does not watch IngressRoute resources and silently ignores the annotation. Always create the Certificate resource explicitly and reference the resulting Secret via `tls.secretName` in the IngressRoute.
 
 **Rule:** For Traefik — create Certificate explicitly, use `tls.secretName`. The `cert-manager.io/cluster-issuer` annotation is for standard Kubernetes Ingress only.
+
+---
 
 ### 5. Grafana root_url Must Match the Protocol in Every Demo
 
@@ -1061,6 +1086,8 @@ The `cert-manager.io/cluster-issuer` annotation on Kubernetes Ingress resources 
 
 **Rule:** Whenever the protocol or domain changes, update `root_url` in `otel-demo-app-values.yaml` before reinstalling. Incorrect `root_url` causes Grafana to generate `http://` Location headers even over HTTPS — resulting in extra redirect hops through the HTTP→HTTPS redirect.
 
+---
+
 ### 6. external-dns Annotation Goes on Traefik Service, Not IngressRoute
 
 For Traefik, external-dns reads the NLB hostname from `Service.status.loadBalancer.ingress[0].hostname`. IngressRoute CRD has no `.status.loadBalancer` field — external-dns cannot discover the NLB hostname from it. Annotating the Traefik Service (not the IngressRoute) is required.
@@ -1068,6 +1095,28 @@ For Traefik, external-dns reads the NLB hostname from `Service.status.loadBalanc
 For ALB, external-dns reads from `Ingress.status.loadBalancer.ingress[0].hostname` — the annotation goes on the Ingress object. This difference is covered in Demo-05 Lessons Learned.
 
 **Rule:** Traefik — annotate the Service. ALB — annotate the Ingress.
+
+---
+
+### 7. Middleware Must Be in Same Namespace as IngressRoute
+
+Traefik does not allow cross-namespace Middleware references. If the IngressRoute references a Middleware from another namespace, Traefik logs:
+
+```
+middleware traefik/https-redirect is not in the IngressRoute namespace otel-demo
+```
+
+**Wrong:**
+- Middleware in `traefik` namespace
+- IngressRoute references it with `namespace: traefik`
+- Result: HTTP route returns 404 ❌
+
+**Correct:**
+- Middleware in `otel-demo` namespace
+- IngressRoute references it without `namespace` field
+- Result: HTTP redirect works ✅
+
+**Rule:** Create Middleware resources in the same namespace as the IngressRoute that uses them.
 
 ---
 
@@ -1098,8 +1147,8 @@ kubectl describe clusterissuer letsencrypt-staging
 **Certificate stuck not-ready:**
 ```bash
 # Check challenge status
-kubectl get challenges -n traefik
-kubectl describe challenge -n traefik
+kubectl get challenges -n otel-demo
+kubectl describe challenge -n otel-demo
 
 # Check cert-manager logs for errors
 kubectl logs -n cert-manager deployment/cert-manager \
@@ -1126,22 +1175,34 @@ dig +short _acme-challenge.rselvantech.com TXT @8.8.8.8
 kubectl logs -n cert-manager deployment/cert-manager | grep -i "waiting\|propagat"
 ```
 
-**Traefik returns 404 on HTTPS:**
+**Traefik serving default self-signed certificate:**
 ```bash
-# Verify Secret exists in traefik namespace (not otel-demo)
-kubectl get secret -n traefik | grep tls
+# Verify Secret exists in otel-demo namespace (same as IngressRoute)
+kubectl get secret wildcard-rselvantech-prod-tls -n otel-demo
 
 # Verify IngressRoute references correct secretName
 kubectl get ingressroute -n otel-demo -o yaml | grep secretName
 
-# Check Traefik logs
-kubectl logs -n traefik deployment/traefik | grep -i "tls\|cert\|error"
+# Check which cert Traefik is serving
+echo | openssl s_client -connect app.rselvantech.com:443 -servername app.rselvantech.com 2>/dev/null | openssl x509 -noout -issuer
+```
+
+**Traefik returns 404 on HTTP:**
+```bash
+# Check Traefik logs for middleware errors
+kubectl logs -n traefik deployment/traefik | grep -i "middleware\|error"
+
+# Verify Middleware exists in same namespace as IngressRoute
+kubectl get middleware -n otel-demo
+
+# Verify IngressRoute matches hosts correctly
+kubectl get ingressroute apps-http-redirect -n otel-demo -o yaml | grep match
 ```
 
 **Browser shows staging certificate (fake CA / not trusted):**
 ```bash
 # Verify production certificate is Ready
-kubectl get certificate -n traefik
+kubectl get certificate -n otel-demo
 
 # Verify IngressRoute references production Secret (not staging)
 kubectl get ingressroute -n otel-demo grafana-https -o yaml | grep secretName
@@ -1152,7 +1213,7 @@ kubectl get ingressroute -n otel-demo grafana-https -o yaml | grep secretName
 **Let's Encrypt rate limit hit:**
 ```bash
 # Check certificate events
-kubectl describe certificate wildcard-rselvantech-prod -n traefik | grep -A5 Events
+kubectl describe certificate wildcard-rselvantech-prod -n otel-demo | grep -A5 Events
 
 # If rate limited — wait up to 1 week or use staging to continue testing
 # Rate limit info: https://letsencrypt.org/docs/rate-limits/
