@@ -45,7 +45,7 @@ By the end of this lab, you will be able to:
 7. ✅ Correctly delete a static pod by removing its manifest file
 8. ✅ Identify mirror pods and explain their purpose
 
-## Files
+## Directory Structure
 
 ```
 01-manual-scheduling/
