@@ -39,7 +39,7 @@ By the end of this lab, you will be able to:
 6. ✅ Perform zero-risk rollbacks with both strategies
 7. ✅ Understand trade-offs between different deployment patterns
 
-## Files
+## Directory Structure
 
 ```
 03-deployment-strategies/

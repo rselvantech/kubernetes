@@ -37,7 +37,7 @@ By the end of this lab, you will be able to:
 6. ✅ Rollback failed deployments to previous versions
 7. ✅ Pause and resume rollouts for controlled deployments
 
-## Files
+## Directory Structure
 
 ```
 02-rolling-update-rollback/

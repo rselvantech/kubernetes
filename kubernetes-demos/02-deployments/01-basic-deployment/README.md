@@ -35,7 +35,7 @@ By the end of this lab, you will be able to:
 5. ✅ Scale Deployments up and down
 6. ✅ Properly clean up Kubernetes resources
 
-## Files
+## Directory Structure
 
 ```
 01-basic-deployment/

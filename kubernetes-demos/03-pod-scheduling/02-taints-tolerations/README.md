@@ -38,7 +38,7 @@ By the end of this lab, you will be able to:
 6. ✅ Demonstrate `tolerationSeconds` with a live eviction timer
 7. ✅ Explain why tolerations don't guarantee pod placement
 
-## Files
+## Directory Structure
 
 ```
 02-taints-tolerations/
@@ -571,15 +571,15 @@ kubectl get pods -o wide -w
 
 ```
 # Immediately after taint applied — pods still running (30s grace period)
-busybox-deploy-xxxxxxxxx-xxxxx   1/1   Running      3node-m02   AGE: 45s
+plain-deploy-xxxxxxxxx-xxxxx   1/1   Running      3node-m02   AGE: 45s
 
 # ~30 seconds later — eviction triggered
-busybox-deploy-xxxxxxxxx-xxxxx   1/1   Terminating  3node-m02
-busybox-deploy-xxxxxxxxx-yyyyy   1/1   Running      3node-m02   ← NEW pod
+plain-deploy-xxxxxxxxx-xxxxx   1/1   Terminating  3node-m02
+plain-deploy-xxxxxxxxx-yyyyy   1/1   Running      3node-m02   ← NEW pod
 
 # Another 30s — the replacement is also evicted (same timer applies!)
-busybox-deploy-xxxxxxxxx-yyyyy   1/1   Terminating  3node-m02
-busybox-deploy-xxxxxxxxx-zzzzz   1/1   Running      3node-m02   ← NEW pod
+plain-deploy-xxxxxxxxx-yyyyy   1/1   Terminating  3node-m02
+plain-deploy-xxxxxxxxx-zzzzz   1/1   Running      3node-m02   ← NEW pod
 ```
 
 > ⚠️ **Important Observation:** You'll see a continuous eviction loop. The Deployment keeps creating replacement pods on `3node-m02` because the toleration **still permits** scheduling there. Each new pod is also evicted after 30 seconds. This loop continues until you remove the taint.
@@ -922,14 +922,6 @@ Taints: <none>
 
 ---
 
-**Cleanup:**
-```bash
-kubectl delete deployment failure-demo
-kubectl delete pod inspect-pod
-```
-
----
-
 ### Step 15: Final Cleanup
 
 ```bash
@@ -938,7 +930,7 @@ kubectl describe node | grep -A2 Taints
 
 
 # Delete all deployments and pods from this lab
-kubectl delete deployment failure-demo
+ kubectl delete deployment --all
 
 # Verify clean state
 kubectl get all
