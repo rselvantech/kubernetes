@@ -42,7 +42,7 @@ By the end of this lab, you will be able to:
 ## Files
 
 ```
-07-deployment-strategies/
+03-deployment-strategies/
 └── src/
     ├── blue-green/
     │   ├── blue-deployment.yaml       # Version 1 (Blue)
@@ -236,7 +236,7 @@ spec:
 ### Step 2: Deploy Blue Version (Initial Production)
 
 ```bash
-cd 07-deployment-strategies/src/blue-green
+cd 3/src/blue-green
 
 # Deploy Blue version
 kubectl apply -f blue-deployment.yaml
@@ -552,7 +552,7 @@ Canary traffic = 1/5 × 100 = 20%
 ### Step 2: Deploy Stable Version
 
 ```bash
-cd 07-deployment-strategies/src/canary
+cd 3/src/canary
 
 # Deploy stable version
 kubectl apply -f stable-deployment.yaml
