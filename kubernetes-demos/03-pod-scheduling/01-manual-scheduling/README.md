@@ -49,6 +49,7 @@ By the end of this lab, you will be able to:
 
 ```
 01-manual-scheduling/
+├── README.md                    # This file
 └── src/
     ├── manual-pod.yaml          # Pod with nodeName targeting a worker node
     ├── manual-pod-cp.yaml       # Pod with nodeName targeting the control plane

@@ -51,6 +51,7 @@ By the end of this lab, you will be able to:
 
 ```
 03-node-selector-affinity/
+├── README.md                       # This file
 └── src/
     ├── ns-deploy.yaml              # nodeSelector — single label
     ├── ns-deploy-multi.yaml        # nodeSelector — multiple labels (AND + Pending)

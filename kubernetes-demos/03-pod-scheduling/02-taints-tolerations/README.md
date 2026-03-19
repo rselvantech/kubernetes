@@ -42,6 +42,7 @@ By the end of this lab, you will be able to:
 
 ```
 02-taints-tolerations/
+├── README.md                         # This file
 └── src/
     ├── toleration-equal.yaml         # Deployment with Equal operator toleration
     ├── toleration-exists.yaml        # Pod with Exists operator toleration
