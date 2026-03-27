@@ -40,6 +40,10 @@ resources.
 - Understanding of QoS classes (BestEffort, Burstable, Guaranteed)
 - Understanding of `spec.activeDeadlineSeconds`
 
+> 💡 `spec.activeDeadlineSeconds` is covered in depth in
+> [04-pod-deep-dive/04-workload-lifetime-controls](../../04-pod-deep-dive/04-workload-lifetime-controls/).
+> Here it is only relevant as the distinguishing criterion for the `Terminating` vs `NotTerminating` quota scopes.
+
 ## Lab Objectives
 
 By the end of this lab, you will be able to:
@@ -49,8 +53,9 @@ By the end of this lab, you will be able to:
 4. ✅ Apply Terminating and NotTerminating scopes
 5. ✅ Use PriorityClass scope to limit priority pod consumption
 6. ✅ Apply multiple quotas in one namespace simultaneously
-7. ✅ Monitor quota status — Hard, Used, remaining capacity
-8. ✅ Implement per-namespace quota for multi-team isolation
+7. ✅ Apply Three Quotas in One Namespace
+8. ✅ Monitor quota status — Hard, Used, remaining capacity
+9. ✅ Implement per-namespace quota for multi-team isolation
 
 ## Directory Structure
 
@@ -65,6 +70,9 @@ By the end of this lab, you will be able to:
     ├── quota-terminating.yaml         # Quota scoped to Terminating pods
     ├── quota-notterminating.yaml      # Quota scoped to NotTerminating pods
     ├── quota-priorityclass.yaml       # Quota scoped to PriorityClass
+    ├── global-quota.yaml          
+    ├── best-effort-limiter.yaml   
+    ├── critical-pods-only.yaml    
     ├── quota-team-a.yaml              # Team-A namespace quota
     └── quota-team-b.yaml              # Team-B namespace quota
 ```
@@ -72,6 +80,35 @@ By the end of this lab, you will be able to:
 ---
 
 ## Understanding ResourceQuota Scopes
+
+### ResourceQuota Syntax ( with scope ) — Memory Aid
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: my-quota
+  namespace: default
+spec:
+  hard:                          # H — Hard limits
+    pods: "10"
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+  scopeSelector:                 # S — Scope filter (optional)
+    matchExpressions:
+      - scopeName: PriorityClass # which scope
+        operator: In             # how to match
+        values:
+          - critical             # what to match
+```
+
+**HS** — "Hard Scopes"
+```
+H → hard          required — the limits to enforce
+S → scopeSelector optional — which objects to count
+```
 
 ### What is a Scope
 
@@ -139,34 +176,7 @@ PriorityClass scope → can track:
   limits.cpu, limits.memory
 ```
 
-### ResourceQuota Syntax — Memory Aid
 
-```yaml
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: my-quota
-  namespace: default
-spec:
-  hard:                          # H — Hard limits
-    pods: "10"
-    requests.cpu: "4"
-    requests.memory: "8Gi"
-    limits.cpu: "8"
-    limits.memory: "16Gi"
-  scopeSelector:                 # S — Scope filter (optional)
-    matchExpressions:
-      - scopeName: PriorityClass # which scope
-        operator: In             # how to match
-        values:
-          - critical             # what to match
-```
-
-**HS** — "Hard Scopes"
-```
-H → hard          required — the limits to enforce
-S → scopeSelector optional — which objects to count
-```
 
 ---
 
@@ -258,14 +268,13 @@ Resource                Used  Hard
 configmaps              1     10    ← kube-root-ca.crt counted
 persistentvolumeclaims  0     4
 pods                    0     10
-secrets                 1     10    ← default service account token counted
+secrets                 0     10    
 services                0     5
 services.loadbalancers  0     0
 services.nodeports      0     0
 ```
 
-> Existing namespace objects (kube-root-ca.crt configmap, default
-> service account secret) are already counted against quota.
+> Existing namespace objects (kube-root-ca.crt configmap) are already counted against quota.
 
 **Cleanup:**
 ```bash
@@ -327,6 +336,18 @@ spec:
       command: ["sh", "-c", "sleep 3600"]
 EOF
 
+kubectl describe pod -n quota-demo besteffort-pod | grep "QoS Class"
+```
+
+**Expected output:**
+```
+QoS Class:                   BestEffort
+```
+
+
+**Check Quota**
+
+```
 kubectl describe quota besteffort-quota -n quota-demo
 ```
 
@@ -361,11 +382,15 @@ spec:
           memory: "64Mi"
 EOF
 
+kubectl describe pod -n quota-demo guaranteed-pod | grep "QoS Class" 
+
 kubectl describe quota besteffort-quota -n quota-demo
 ```
 
 **Expected output:**
 ```
+QoS Class:                   Guaranteed
+
 Resource  Used  Hard
 --------  ----  ----
 pods      1     3    ← still 1 — Guaranteed pod not counted ✅
@@ -404,6 +429,19 @@ spec:
 
 ```bash
 kubectl apply -f quota-notbesteffort.yaml
+
+kubectl describe quota notbesteffort-quota -n quota-demo
+```
+
+**Expected output:**
+```
+Name:            notbesteffort-quota
+Namespace:       quota-demo
+Resource         Used  Hard
+--------         ----  ----
+pods             0     5
+requests.cpu     0     2
+requests.memory  0     2Gi
 ```
 
 **Test — one BestEffort and one Burstable pod:**
@@ -449,11 +487,13 @@ kubectl describe quota notbesteffort-quota -n quota-demo
 
 **Expected output:**
 ```
+Name:            notbesteffort-quota
+Namespace:       quota-demo
 Resource         Used   Hard
 --------         ----   ----
 pods             1      5     ← only burstable counted, not besteffort ✅
-requests.cpu     100m   2
-requests.memory  64Mi   2Gi
+requests.cpu     100m   2     ← burstable container's  requests.cpu ✅
+requests.memory  64Mi   2Gi   ← burstable container's  requests.memory ✅
 ```
 
 **Cleanup:**
@@ -509,6 +549,28 @@ spec:
 ```bash
 kubectl apply -f quota-terminating.yaml
 kubectl apply -f quota-notterminating.yaml
+
+kubectl describe quota -n quota-demo notterminating-quota terminating-quota
+```
+
+**Expected output:**
+```
+Name:            notterminating-quota
+Namespace:       quota-demo
+Resource         Used  Hard
+--------         ----  ----
+pods             0     10
+requests.cpu     0     4
+requests.memory  0     8Gi
+
+
+Name:            terminating-quota
+Namespace:       quota-demo
+Resource         Used  Hard
+--------         ----  ----
+pods             0     5
+requests.cpu     0     1
+requests.memory  0     1Gi
 ```
 
 **Test — one long-running pod and one terminating pod:**
@@ -597,8 +659,6 @@ kubectl delete -f quota-notterminating.yaml
 ### Step 6: PriorityClass Scope
 
 Scope a quota to count only pods using a specific PriorityClass.
-Covered in depth in [Demo 08 Step 6](../08-priority-preemption/) —
-this step verifies the core behaviour.
 
 > Create the required PriorityClasses if not already present:
 
@@ -629,6 +689,20 @@ spec:
 
 ```bash
 kubectl apply -f quota-priorityclass.yaml
+
+
+kubectl describe quota -n quota-demo critical-quota 
+```
+
+**Expected output:**
+```
+Name:            critical-quota
+Namespace:       quota-demo
+Resource         Used  Hard
+--------         ----  ----
+pods             0     2
+requests.cpu     0     2
+requests.memory  0     2Gi
 ```
 
 **Test 1 — critical pod counted, low pod not counted:**
@@ -749,6 +823,22 @@ limited: pods=2
 
 Priority abuse prevented ✅
 
+```bash
+#Check Quota
+kubectl describe quota -n quota-demo critical-quota
+```
+
+**Expected output:**
+```
+Name:            critical-quota
+Namespace:       quota-demo
+Resource         Used   Hard
+--------         ----   ----
+pods             2      2
+requests.cpu     1      2
+requests.memory  512Mi  2Gi
+```
+
 **Cleanup:**
 ```bash
 kubectl delete pod critical-pod-1 critical-pod-2 low-pod-1 \
@@ -759,6 +849,7 @@ kubectl delete priorityclass critical low
 
 ---
 
+
 ### Step 7: Multiple Quotas in One Namespace
 
 Multiple ResourceQuotas coexist in one namespace. A pod must satisfy
@@ -768,6 +859,37 @@ ALL applicable quotas — most restrictive wins.
 kubectl apply -f quota-compute.yaml
 kubectl apply -f quota-objects.yaml
 
+#Check Quota
+kubectl describe quota -n quota-demo
+```
+
+```bash
+Name:            compute-quota
+Namespace:       quota-demo
+Resource         Used  Hard
+--------         ----  ----
+limits.cpu       0     4
+limits.memory    0     4Gi
+requests.cpu     0     2
+requests.memory  0     2Gi
+
+
+Name:                   object-quota
+Namespace:              quota-demo
+Resource                Used  Hard
+--------                ----  ----
+configmaps              1     10
+persistentvolumeclaims  0     4
+pods                    0     10
+secrets                 0     10
+services                0     5
+services.loadbalancers  0     0
+services.nodeports      0     0
+```
+
+**Test a pod with a resource request and limit:**
+
+```bash
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
@@ -797,17 +919,23 @@ kubectl describe quota -n quota-demo
 Name:            compute-quota
 Resource         Used    Hard
 --------         ----    ----
-limits.cpu       1       4
-limits.memory    512Mi   4Gi
-requests.cpu     500m    2
-requests.memory  256Mi   2Gi
+limits.cpu       1       4           ← counted here  ✅
+limits.memory    512Mi   4Gi         ← counted here  ✅
+requests.cpu     500m    2           ← counted here  ✅
+requests.memory  256Mi   2Gi         ← counted here  ✅
 
-Name:            object-quota
-Resource         Used  Hard
---------         ----  ----
-pods             1     10   ← counted here too
-services         0     5
-...
+
+Name:                   object-quota
+Namespace:              quota-demo
+Resource                Used  Hard
+--------                ----  ----
+configmaps              1     10
+persistentvolumeclaims  0     4
+pods                    1     10      ← counted here too  ✅
+secrets                 0     10
+services                0     5
+services.loadbalancers  0     0
+services.nodeports      0     0
 ```
 
 Pod counted against both quotas simultaneously — all must be satisfied. ✅
@@ -821,7 +949,368 @@ kubectl delete -f quota-objects.yaml
 
 ---
 
-### Step 8: Multi-team Namespace Isolation
+### Step 8: Three Quotas in One Namespace
+
+
+Think of multiple ResourceQuota objects in a single namespace like a series of security checkpoints at an airport. To get to your gate (the Node), you must pass through every checkpoint that applies to you. If a checkpoint doesn't apply to you, you skip it, but you still have to pass the general ones.
+
+In Kubernetes, if multiple quotas exist, they are additive and restrictive. A Pod is only admitted if it satisfies the aggregate of all applicable quotas.
+
+Let's imagine a namespace where we want to strictly control "BestEffort" pods (those with no limits) while still having a "global ceiling" for the whole namespace.
+
+> Create the required PriorityClasses if not already present:
+
+```bash
+kubectl create priorityclass critical --value=100000 --global-default=false
+```
+
+**Quota A - The "Global Ceiling" (No Scope)**
+
+This applies to every single Pod created in the namespace, regardless of its priority or QoS.
+
+**global-quota.yaml:**
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: global-quota
+  namespace: quota-demo
+spec:
+  hard:
+    pods: "10"
+```
+
+**Quota B - The "BestEffort" Sandbox (Scoped)**
+
+This only tracks Pods that have no resource requests/limits defined.
+
+**best-effort-limiter.yaml:**
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: best-effort-limiter
+  namespace: quota-demo
+spec:
+  hard:
+    pods: "4"
+  scopeSelector:
+    matchExpressions:
+    - scopeName: BestEffort
+      operator: Exists
+```
+
+**Quota C - The "Critical" VIP Lane (Scoped)**
+
+This only tracks Pods assigned the high-priority PriorityClass.
+
+**critical-pods-only.yaml:**
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: critical-pods-only
+  namespace: quota-demo
+spec:
+  hard:
+    pods: "2"
+  scopeSelector:
+    matchExpressions:
+    - scopeName: PriorityClass
+      operator: In
+      values: ["critical"]
+```
+
+```bash
+kubectl apply -f global-quota.yaml
+kubectl apply -f best-effort-limiter.yaml
+kubectl apply -f critical-pods-only.yaml
+
+#Check Quota
+kubectl describe quota -n quota-demo
+```
+
+```bash
+Name:       best-effort-limiter
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     4
+
+
+Name:       critical-pods-only
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     2
+
+
+Name:       global-quota
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     10
+```
+
+**Test 1 — Create a BestEffort pod:**
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: besteffort-pod
+  namespace: quota-demo
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: app
+      image: busybox
+      command: ["sh", "-c", "sleep 3600"]
+EOF
+
+kubectl describe pod -n quota-demo besteffort-pod | grep "QoS Class"
+```
+
+**Expected output:**
+```
+QoS Class:                   BestEffort
+```
+
+
+**Check Quota:**
+```
+kubectl describe quota -n quota-demo
+```
+
+**Expected output:**
+```
+Name:       best-effort-limiter
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     4         ← counted here  ✅
+
+
+Name:       critical-pods-only
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     2
+
+
+Name:       global-quota
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     10        ← counted here  ✅
+```
+
+**Test 1 — Results**
+
+- `Check Quota A:` Does the namespace have < 10 pods total? `Yes.` (Proceed)
+
+- `Check Quota B:` Does the namespace have < 4 BestEffort pods? `Yes.` (Proceed)
+
+- `Check Quota C:` Does this Pod have Citical priority? `No.` (Skip this check).
+
+- `Result:` **Pod is Created. It consumes 1 count from Quota A and 1 count from Quota B.**
+
+---
+
+**Test 2 — Create a Guranteed pod with Critical Priority Pod:**
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: guaranteed-pod
+  namespace: quota-demo
+spec:
+  priorityClassName: critical
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: app
+      image: busybox
+      command: ["sh", "-c", "sleep 3600"]
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "64Mi"
+        limits:
+          cpu: "100m"
+          memory: "64Mi"
+EOF
+
+kubectl describe pod -n quota-demo guaranteed-pod | grep "QoS Class" 
+```
+**Expected output:**
+```
+QoS Class:                   Guaranteed
+```
+
+**Check Quota:**
+```
+kubectl describe quota -n quota-demo
+```
+
+**Expected output:**
+```
+Name:       best-effort-limiter
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     4
+
+
+Name:       critical-pods-only
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     2               ← counted here  ✅
+
+
+Name:       global-quota
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        2     10              ← counted here  ✅
+```
+
+**Test 2 — Results**
+
+- `Check Quota A:` Does the namespace have < 10 pods total? `Yes.` (Proceed)
+
+- `Check Quota B:` Does the namespace have < 4 BestEffort pods? No. (Skip this check).
+
+- `Check Quota C:` Does this Pod have Citical priority? Yes. (Proceed)
+
+- `Result:` **Pod is Created. It consumes 1 count from Quota A and 1 count from Quota C.**
+
+---
+
+**Test 3 — Create a Regular pod(Burstable):**
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: burstable-pod
+  namespace: quota-demo
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+    - name: app
+      image: busybox
+      command: ["sh", "-c", "sleep 3600"]
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "64Mi"
+        limits:
+          cpu: "200m"
+          memory: "128Mi"
+EOF
+
+kubectl describe pod -n quota-demo burstable-pod | grep "QoS Class"
+```
+**Expected output:**
+```
+QoS Class:                   Burstable
+```
+
+**Check Quota:**
+```
+kubectl describe quota -n quota-demo
+```
+
+**Expected output:**
+```
+Name:       best-effort-limiter
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     4
+
+
+Name:       critical-pods-only
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     2
+
+
+Name:       global-quota
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        3     10        ← counted here  ✅
+```
+
+**Test 3 — Results**
+
+- `Check Quota A:` Does the namespace have < 10 pods total? `Yes.` (Proceed)
+
+- `Check Quota B:` Does the namespace have < 4 BestEffort pods? `No.` (Skip).
+
+- `Check Quota C:` Does this Pod have Citical priority? `No.` (Skip).
+
+- `Result:` **Pod is Created. It only consumes 1 count from Quota A**
+
+---
+
+**Test 4 — Delete pods: Check quota recovered**
+
+```
+kubectl delete pod -n quota-demo besteffort-pod guaranteed-pod
+```
+**Check Quota:**
+```
+kubectl describe quota -n quota-demo
+```
+
+**Expected output:**
+```
+Name:       best-effort-limiter
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     4          ← Decremented by 1 here  ✅
+
+
+Name:       critical-pods-only
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        0     2         ← Decremented by 1 here  ✅
+
+
+Name:       global-quota
+Namespace:  quota-demo
+Resource    Used  Hard
+--------    ----  ----
+pods        1     10
+```
+
+**Test 4 — Results**
+
+- `Result:` **`best-effort-limiter` and `critical-pods-only` quota are recovered by 1 count each**
+
+**Cleanup:**
+```bash
+kubectl delete pod burstable-pod -n quota-demo --grace-period=0 --force
+kubectl delete -f global-quota.yaml
+kubectl delete -f best-effort-limiter.yaml
+kubectl delete -f critical-pods-only.yaml
+kubectl delete priorityclass critical
+```
+
+---
+
+
+### Step 9: Multi-team Namespace Isolation
 
 Real-world pattern — each team gets a dedicated namespace with quota.
 
@@ -873,7 +1362,7 @@ kubectl describe quota -n team-a
 kubectl describe quota -n team-b
 ```
 
-Monitor quota usage with jsonpath:
+Create resources in team-a and team-b namespaces and Monitor quota usage per namespace separately with jsonpath:
 
 ```bash
 kubectl get quota team-a-quota -n team-a \
@@ -935,6 +1424,7 @@ In this lab, you:
   (NotTerminating) workloads
 - ✅ Used PriorityClass scope to prevent priority class abuse
 - ✅ Applied multiple quotas in one namespace — all must be satisfied
+- ✅ Applied Three Quotas in One Namespace
 - ✅ Implemented per-namespace quota for multi-team isolation
 - ✅ Monitored quota status using jsonpath
 

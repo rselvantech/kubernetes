@@ -1,7 +1,7 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: web-pdb-minavailable
+  name: web-pdb
 spec:
   minAvailable: 2
   selector:
