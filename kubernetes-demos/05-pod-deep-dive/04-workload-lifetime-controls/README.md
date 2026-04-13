@@ -2,9 +2,18 @@
 
 ## Lab Overview
 
-This demo goes deeper into the full set of fields that control **how long a workload is allowed to run, how gracefully it shuts down, and how failures are handled over time**.
+Demo 07 introduced ResourceQuota scopes — including `Terminating` and
+`NotTerminating` scopes that classify pods based on `spec.activeDeadlineSeconds`.
+This demo goes deeper into the full set of fields that control **how long a
+workload is allowed to run, how gracefully it shuts down, and how failures are
+handled over time**.
 
 ```
+Demo 07 referenced:
+  → spec.activeDeadlineSeconds as a scope classifier
+    (Terminating = activeDeadlineSeconds >= 0)
+    (NotTerminating = activeDeadlineSeconds is nil)
+
 This demo covers:
   → spec.activeDeadlineSeconds                         — hard wall-clock limit on active time
   → spec.backoffLimit                                  — max Pod retry attempts before giving up
@@ -32,7 +41,9 @@ service workloads coexist safely within shared namespace quotas.
 - kubectl installed and configured
 
 **Knowledge Requirements:**
+- **REQUIRED:** Completion of [07-resource-quota-deep-dive](../../03-pod-scheduling/07-resource-quota-deep-dive/)
 - Understanding of Pod lifecycle — Running, Succeeded, Failed states
+- Understanding of `Terminating` vs `NotTerminating` quota scopes
 - Understanding of Job, CronJob, and bare Pod resource types
 
 ## Lab Objectives
@@ -40,12 +51,13 @@ service workloads coexist safely within shared namespace quotas.
 By the end of this lab, you will be able to:
 1. ✅ Explain `spec.activeDeadlineSeconds` and its default behaviour
 2. ✅ Distinguish `activeDeadlineSeconds` from `backoffLimit` — time vs attempts
-3. ✅ Explain `terminationGracePeriodSeconds` and the full Pod shutdown sequence
+3. ✅ Explain `terminationGracePeriodSeconds` shutdown sequence (concept) — full demo in 01-pod-lifecycle-termination-errors Step 7
 4. ✅ Configure `startingDeadlineSeconds` and `jobTemplate.spec.activeDeadlineSeconds` on a CronJob
 5. ✅ Use `backoffLimitPerIndex` for safe Indexed Job failure budgets
 6. ✅ Apply `podFailurePolicy` to ignore evictions and fail fast on bad exit codes
 7. ✅ Understand how all fields interact — which limit fires first
-8. ✅ Read `kubectl describe job` Events to identify `DeadlineExceeded` vs `BackoffLimitExceeded`
+8. ✅ Read `kubectl describe job` STATUS, Events, and jsonpath conditions to identify `DeadlineExceeded` vs `BackoffLimitExceeded`
+9. ✅ Understand `FailureTarget` vs `Failed` Job status transition and what each means
 
 ## Directory Structure
 
@@ -55,8 +67,9 @@ By the end of this lab, you will be able to:
 └── src/
     ├── 01-active-deadline.yaml        # activeDeadlineSeconds hard termination
     ├── 02-backoff-vs-deadline.yaml    # backoffLimit vs activeDeadlineSeconds race
-    ├── 03-cronjob-deadline.yaml       # startingDeadlineSeconds + per-Job activeDeadlineSeconds
-    └── 04-pod-failure-policy.yaml     # podFailurePolicy — ignore / fail fast
+    ├── 03-grace-period.yaml           # terminationGracePeriodSeconds reference YAML (demo → 01-pod-lifecycle-termination-errors Step 7)
+    ├── 04-cronjob-deadline.yaml       # startingDeadlineSeconds + per-Job activeDeadlineSeconds
+    └── 05-pod-failure-policy.yaml     # podFailurePolicy — ignore / fail fast
 ```
 
 ---
@@ -88,12 +101,18 @@ critical — setting a field at the wrong level has no effect.
 |---|---|---|---|---|
 | `spec.activeDeadlineSeconds` | Pod | Pod spec | Hard wall-clock ceiling on active time | `nil` (unlimited) |
 | `spec.activeDeadlineSeconds` | Job | Job spec | Hard wall-clock ceiling; kills all Pods | `nil` (unlimited) |
-| `spec.backoffLimit` | Job | Job spec | Max Pod retry attempts before Job fails | `6` |
-| `spec.podFailurePolicy` | Job | Job spec | Fine-grained rules — ignore or fail fast | `nil` |
-| `spec.backoffLimitPerIndex` | Job (Indexed) | Job spec | Per-index failure budget | `nil` |
-| `spec.startingDeadlineSeconds` | CronJob | CronJob spec | Max seconds a missed schedule can be late | `nil` |
-| `spec.jobTemplate.spec.activeDeadlineSeconds` | CronJob | JobTemplate spec | Per-Job runtime cap for every spawned Job | `nil` |
+| `spec.backoffLimit` | Job **only** | Job spec | Max Pod retry attempts before Job fails | `6` |
+| `spec.podFailurePolicy` | Job **only** | Job spec | Fine-grained rules — ignore or fail fast | `nil` |
+| `spec.backoffLimitPerIndex` | Job (Indexed) **only** | Job spec | Per-index failure budget | `nil` |
+| `spec.startingDeadlineSeconds` | CronJob **only** | CronJob spec | Max seconds a missed schedule can be late | `nil` |
+| `spec.jobTemplate.spec.activeDeadlineSeconds` | CronJob **only** | JobTemplate spec | Per-Job runtime cap for every spawned Job | `nil` |
 | `spec.terminationGracePeriodSeconds` | Pod | Pod spec | Grace window between SIGTERM and SIGKILL | `30s` |
+
+> **Pod vs Job scope:** `activeDeadlineSeconds` and `terminationGracePeriodSeconds`
+> apply to both Pods and Jobs (Jobs embed a Pod template). `backoffLimit`,
+> `podFailurePolicy`, and `backoffLimitPerIndex` are **Job-only** — a bare Pod
+> has no retry mechanism at the Pod level; restarts are controlled by
+> `restartPolicy` on the Pod spec, not by `backoffLimit`.
 
 > **Note:** There is **no** `completionDeadlineSeconds` field on CronJob.
 > Applying a CronJob YAML with that field produces:
@@ -166,7 +185,7 @@ For a CronJob:
   → Applies independently to each spawned Job — timer resets every run
 ```
 
-**Where to check `activeDeadlineSeconds` in kubectl output:**
+**Where to check `activeDeadlineSeconds` in kubectl output — Job:**
 
 ```bash
 kubectl describe job <n>
@@ -176,8 +195,54 @@ kubectl describe job <n>
 # Events section — confirms it fired:
 #   Warning  DeadlineExceeded  Xs  job-controller  Job was active longer than specified deadline
 #
-# OR via jsonpath on job status conditions:
+# Job STATUS column transitions during deadline firing:
+kubectl get job <n> -w
+# NAME    STATUS         COMPLETIONS   DURATION   AGE
+# <n>     FailureTarget  0/1           16s        16s   ← intermediate: deadline fired, Pod cleanup in progress
+# <n>     Failed         0/1           44s        44s   ← final: all Pods gone, Job settled as complete failure
+#
+# Via jsonpath — conditions array returns two entries (FailureTarget then Failed):
 kubectl get job <n> -o jsonpath='{.status.conditions[*].reason}' && echo
+# → DeadlineExceeded DeadlineExceeded
+# (two values because both FailureTarget and Failed conditions share the same reason)
+#
+# For structured inspection of a single condition object:
+kubectl get job <n> -o jsonpath='{.status.conditions[0]}' | python3 -m json.tool
+# {
+#     "lastProbeTime": "...",
+#     "lastTransitionTime": "...",
+#     "message": "Job was active longer than specified deadline",
+#     "reason": "DeadlineExceeded",
+#     "status": "True",
+#     "type": "FailureTarget"
+# }
+```
+
+> **`FailureTarget` explained:** Introduced in newer Kubernetes versions as a
+> clearer intermediate Job condition. It signals that the failure cause has been
+> determined (deadline exceeded) and Pod termination is in progress. `Failed` is
+> the final settled state once all Pods are gone. Both conditions carry
+> `reason: DeadlineExceeded` — two entries in the conditions array is normal.
+>
+> **Why `{.status.conditions[*]}` without `.reason` fails python3 json.tool:**
+> The jsonpath `{.status.conditions[*]}` returns multiple JSON objects
+> concatenated without a separator — not valid JSON for a parser. Use
+> `{.status.conditions[0]}` (single index) to get one parseable object,
+> or append `.reason` to extract just the string values.
+
+**Where to check `activeDeadlineSeconds` in kubectl output — bare Pod:**
+
+```bash
+kubectl describe pod <n>
+# Summary header — confirms field is set:
+#   Active Deadline Seconds:  30s
+#
+# Status — when fired, Pod phase shows:
+#   Status:   Failed
+#   Reason:   DeadlineExceeded
+#
+# Via jsonpath:
+kubectl get pod <n> -o jsonpath='{.status.reason}' && echo
 # → DeadlineExceeded
 ```
 
@@ -205,10 +270,16 @@ as a Pod classifier for quota scope targeting, not as a quota field itself.
 
 ### spec.backoffLimit — In Depth
 
-Controls **how many times** Kubernetes retries a failed Pod before marking the
-Job as failed.
+Controls **how many times** the Job controller retries by creating or restarting
+a failed Pod before marking the Job as failed.
 
-**Where to check `backoffLimit` in kubectl output:**
+> **Job-only field.** Bare Pods have no `backoffLimit`. For a standalone Pod,
+> restart behaviour is governed entirely by `restartPolicy` on the Pod spec —
+> there is no retry budget or failure count. A Pod with `restartPolicy: Always`
+> or `restartPolicy: OnFailure` restarts indefinitely (subject to node resources)
+> with no upper bound. To apply a retry budget, wrap the workload in a Job.
+
+**Where to check `backoffLimit` in kubectl output — Job:**
 
 ```bash
 kubectl describe job <n>
@@ -218,24 +289,44 @@ kubectl describe job <n>
 # Events section — confirms it fired:
 #   Warning  BackoffLimitExceeded  Xs  job-controller  Job has reached the specified backoff limit
 #
-# OR via jsonpath:
+# Via jsonpath — reason from status conditions:
 kubectl get job <n> -o jsonpath='{.status.conditions[*].reason}' && echo
 # → BackoffLimitExceeded
 ```
 
+> **No equivalent for bare Pods.** A standalone Pod does not have
+> `backoffLimit`. There is no `kubectl describe pod` section for it.
+> Use `kubectl describe pod <n>` → `Restart Count:` to see how many times
+> the container has restarted, but this has no upper limit — it is not
+> the same concept as `backoffLimit`.
+
 **Key facts:**
 
 ```
+  → Job-only field — does NOT apply to bare Pods, Deployments, StatefulSets
   → Default: 6
   → Each failed Pod attempt = one retry consumed
   → Retries use exponential backoff: 10s → 20s → 40s → ... capped at 6 min
-  → Between retries: Pod shows CrashLoopBackOff — this is NORMAL, not an error
-  → With restartPolicy: OnFailure — same Pod restarts (RESTARTS column increments)
-  → With restartPolicy: Never — new Pod created each retry
+  → restartPolicy on the Pod template controls HOW retries happen:
+
+      restartPolicy: OnFailure  → same Pod is restarted in-place
+                                  RESTARTS column in kubectl get pods increments
+                                  Pod shows CrashLoopBackOff between retries
+                                  CrashLoopBackOff is NORMAL — it is the backoff
+                                  wait, NOT an additional failure count
+
+      restartPolicy: Never      → failed Pod is NOT restarted in-place
+                                  job-controller creates a BRAND NEW Pod for each retry
+                                  NO CrashLoopBackOff — you see a new Pod name each time
+                                  old failed Pods remain visible with STATUS: Error
+                                  until TTL or manual cleanup
+
+  → restartPolicy: Always is NOT valid inside a Job template —
+    only OnFailure and Never are allowed
   → activeDeadlineSeconds always wins — remaining retries discarded at deadline
   → backoffLimit and activeDeadlineSeconds are orthogonal:
-      backoffLimit = limits ATTEMPTS
-      activeDeadlineSeconds = limits ELAPSED TIME
+      backoffLimit = limits ATTEMPTS (how many times)
+      activeDeadlineSeconds = limits ELAPSED TIME (how long total)
       whichever fires first wins
 ```
 
@@ -469,22 +560,38 @@ kubectl apply -f 01-active-deadline.yaml
 **How to read the Job output — three methods:**
 
 ```bash
-# Method 1: STATUS column — confirms failure
-kubectl get job demo-active-deadline
+# Method 1: watch STATUS column — observe the FailureTarget → Failed transition
+kubectl get job demo-active-deadline -w
 ```
 
 **Expected output:**
 ```
 NAME                   STATUS          COMPLETIONS   DURATION   AGE
 demo-active-deadline   FailureTarget   0/1           16s        16s
+demo-active-deadline   FailureTarget   0/1           33s        33s
+demo-active-deadline   Failed          0/1           44s        44s
 ```
 
-> `STATUS: Failed` confirms the Job did not complete.
-> `DURATION: 16s` reflects how long the job-controller took to
-> detect and clean up — the 15s deadline was the trigger.
+> **`FailureTarget`** — intermediate state. The 15s deadline fired. Kubernetes has
+> determined the failure cause and is in the process of terminating the running Pod.
+> This cleanup window (a few extra seconds) is normal — it is NOT part of the deadline.
+>
+> **`Failed`** — final settled state. All Pods are gone. Job is marked complete failure.
+>
+> After it settles:
 
 ```bash
-# Method 2: describe — read header + Events to understand WHY it failed
+kubectl get job demo-active-deadline
+```
+
+**Expected output:**
+```
+NAME                   STATUS   COMPLETIONS   DURATION   AGE
+demo-active-deadline   Failed   0/1           60s        60s
+```
+
+```bash
+# Method 2: describe — header confirms field values; Events confirm the failure reason
 kubectl describe job demo-active-deadline
 ```
 
@@ -498,9 +605,9 @@ Parallelism:              1
 Completions:              1
 Completion Mode:          NonIndexed
 Suspend:                  false
-Backoff Limit:            10                                                 ← field value confirmed
+Backoff Limit:            10                    ← 10 retries configured — none consumed
 Start Time:               Fri, 27 Mar 2026 12:45:57 -0400
-Active Deadline Seconds:  15s                                                ← field value confirmed
+Active Deadline Seconds:  15s                   ← this is what fired
 Pods Statuses:            0 Active (0 Ready) / 0 Succeeded / 1 Failed
 
 Events:
@@ -511,13 +618,14 @@ Events:
   Warning  DeadlineExceeded  36s   job-controller  Job was active longer than specified deadline
 ```
 
-> `Backoff Limit: 10` in the header — 10 retries were available but never used.
-> `Active Deadline Seconds: 15s` in the header — this was the active limit.
-> `SuccessfulDelete` in Events — the job-controller killed the Pod when the deadline fired.
-> `Warning DeadlineExceeded` may appear as an additional Event on some versions.
+> `Backoff Limit: 10` — 10 retries configured, none consumed. Deadline fired first.
+> `Active Deadline Seconds: 15s` — the field that triggered termination.
+> `SuccessfulDelete` — job-controller forcibly terminated the running Pod.
+> `Warning DeadlineExceeded` — explicit named reason confirming why the Job failed.
+> This `Warning` event is the **primary** place to read the failure reason.
 
 ```bash
-# Method 3: jsonpath — extract failure reason directly from job conditions
+# Method 3: jsonpath — extract reason(s) from the status conditions array
 kubectl get job demo-active-deadline \
   -o jsonpath='{.status.conditions[0]}' | python3 -m json.tool 
 ```
@@ -528,14 +636,41 @@ kubectl get job demo-active-deadline \
     "lastProbeTime": "2026-03-27T16:46:12Z",
     "lastTransitionTime": "2026-03-27T16:46:12Z",
     "message": "Job was active longer than specified deadline",
-    "reason": "DeadlineExceeded",                                         <- DeadlineExceeded
+    "reason": "DeadlineExceeded",                            <- DeadlineExceeded
     "status": "True",
     "type": "FailureTarget"
 }
 ```
 
-`backoffLimit: 10` — 10 retries remained unused. The deadline fired first
-and discarded all remaining retries. ✅
+> Two `DeadlineExceeded` values because there are **two conditions** in the array:
+> one for `FailureTarget` (intermediate) and one for `Failed` (final).
+> Both carry `reason: DeadlineExceeded`. This is not a duplicate error —
+> it reflects the two-phase Job failure lifecycle.
+
+```bash
+# Inspect one condition as structured JSON (use index [0] not [*]):
+kubectl get job demo-active-deadline \
+  -o jsonpath='{.status.conditions[0]}' | python3 -m json.tool
+```
+
+**Expected output:**
+```json
+{
+    "lastProbeTime": "2026-03-27T16:46:12Z",
+    "lastTransitionTime": "2026-03-27T16:46:12Z",
+    "message": "Job was active longer than specified deadline",
+    "reason": "DeadlineExceeded",
+    "status": "True",
+    "type": "FailureTarget"
+}
+```
+
+> **Why `{.status.conditions[*]}` fails `python3 -m json.tool`:**
+> `[*]` returns multiple objects concatenated without a separator — not valid JSON.
+> Use `[0]` for the first condition or `[1]` for the final `Failed` condition.
+
+`backoffLimit: 10` — 10 retries remained completely unused.
+The 15s deadline fired first and discarded all remaining retries. ✅
 
 **Cleanup:**
 ```bash
@@ -577,16 +712,12 @@ kubectl get pods -l job-name=demo-backoff-race -w
 **Expected output:**
 ```
 NAME                      READY   STATUS             RESTARTS     AGE
-demo-backoff-race-rtwx2   0/1     CrashLoopBackOff   1 (5s ago)   8s
-demo-backoff-race-rtwx2   0/1     Error              2 (16s ago)   19s
-demo-backoff-race-rtwx2   0/1     CrashLoopBackOff   2 (13s ago)   32s
-demo-backoff-race-rtwx2   0/1     Error              3 (29s ago)   48s
-demo-backoff-race-rtwx2   0/1     Terminating        3 (30s ago)   49s
-demo-backoff-race-rtwx2   0/1     Terminating        3             49s
-demo-backoff-race-rtwx2   0/1     Terminating        3             49s
-demo-backoff-race-rtwx2   0/1     Error              3             49s
-demo-backoff-race-rtwx2   0/1     Error              3             50s
-demo-backoff-race-rtwx2   0/1     Error              3             50s
+demo-backoff-race-bl9zt   0/1     CrashLoopBackOff   1 (5s ago)   5s
+demo-backoff-race-bl9zt   0/1     Error              2 (16s ago)  16s
+demo-backoff-race-bl9zt   0/1     CrashLoopBackOff   2 (13s ago)  29s
+demo-backoff-race-bl9zt   0/1     Error              3 (25s ago)  41s
+demo-backoff-race-bl9zt   0/1     Terminating        3 (26s ago)  42s
+demo-backoff-race-bl9zt   0/1     Error              3            43s
 ```
 
 > `CrashLoopBackOff` is the normal intermediate state between retries —
@@ -607,12 +738,12 @@ Pods Statuses:            0 Active (0 Ready) / 0 Succeeded / 1 Failed
 Events:
   Type     Reason                Age   From            Message
   ----     ------                ----  ----            -------
-  Normal   SuccessfulCreate      62s   job-controller  Created pod: demo-backoff-race-rtwx2
-  Normal   SuccessfulDelete      13s   job-controller  Deleted pod: demo-backoff-race-rtwx2
-  Warning  BackoffLimitExceeded  12s   job-controller  Job has reached the specified backoff limit
+  Normal   SuccessfulCreate      56s   job-controller  Created pod: demo-backoff-race-bl9zt
+  Normal   SuccessfulDelete      14s   job-controller  Deleted pod: demo-backoff-race-bl9zt
+  Warning  BackoffLimitExceeded  13s   job-controller  Job has reached the specified backoff limit
 ```
 
-> `Warning BackoffLimitExceeded` fired at ~49s — well before the 120s deadline. ✅
+> `Warning BackoffLimitExceeded` fired at ~43s — well before the 120s deadline. ✅
 > The failure reason is explicit in the Events `Warning` line.
 
 **Confirm via jsonpath:**
@@ -643,14 +774,57 @@ kubectl delete -f 02-backoff-vs-deadline.yaml
 
 ---
 
-### Step 4: terminationGracePeriodSeconds — Shutdown Sequence
+### Step 4: terminationGracePeriodSeconds — Concept and Cross-Reference
 
-Observe the full `preStop → SIGTERM → SIGKILL` sequence and confirm
-shutdown evidence via exit code.
+> 💡 The full `preStop → SIGTERM → SIGKILL` demo — including log capture,
+> shutdown sequence observation, and SIGKILL exit code (137) verification —
+> is in:
+>
+> **[01-pod-lifecycle-termination-errors](../01-pod-lifecycle-termination-errors/), Step 7**
+>
+> `03-grace-period.yaml` in this demo's `src/` is retained as a reference YAML.
+> The live demo steps for this field are not repeated here.
 
-> 💡 Refer [01-pod-lifecycle-termination-errors](../../04-pod-deep-dive/01-pod-lifecycle-termination-errors/), step 7 for demo 
+**Concept recap — what `terminationGracePeriodSeconds` controls:**
+
+```
+Pod deletion triggered
+      │
+      ▼
+  Pod removed from Service endpoints (stops receiving traffic)
+      │
+      ▼
+  preStop hook executes (if defined) — counts against grace period budget
+      │
+      ▼
+  SIGTERM sent to all containers
+      │
+      ▼
+  [terminationGracePeriodSeconds countdown begins]
+      │
+      ├── container exits cleanly → Pod terminates immediately (exit code 0)  ✅
+      └── grace period expires   → SIGKILL sent              (exit code 137) ⚠️
+```
+
+**Key distinction from `activeDeadlineSeconds`:**
+
+```
+terminationGracePeriodSeconds → controls the shutdown WINDOW after deletion is triggered
+                                 applies to EVERY Pod deletion — whether normal or
+                                 triggered by activeDeadlineSeconds firing
+                                 Pod spec field — applies to all Pod types
+
+activeDeadlineSeconds         → controls total ACTIVE LIFETIME before deletion triggers
+                                 Job and Pod spec field — does NOT apply to Deployments
+```
+
+> When `activeDeadlineSeconds` fires on a Job, each Pod is then terminated through
+> the normal `terminationGracePeriodSeconds` shutdown sequence.
+> They work **sequentially**: deadline fires first → triggers Pod deletion →
+> grace period applies to that cleanup. They do not conflict.
 
 ---
+
 
 ### Step 5: CronJob — startingDeadlineSeconds and Per-Job activeDeadlineSeconds
 
@@ -668,7 +842,7 @@ shutdown evidence via exit code.
 > - `spec.jobTemplate.spec.activeDeadlineSeconds` — at JobTemplate spec level —
 >   controls how long each spawned Job is allowed to run
 
-**03-cronjob-deadline.yaml:**
+**04-cronjob-deadline.yaml:**
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -692,7 +866,7 @@ spec:
 ```
 
 ```bash
-kubectl apply -f 03-cronjob-deadline.yaml
+kubectl apply -f 04-cronjob-deadline.yaml
 ```
 
 **Verify CronJob spec — confirm startingDeadlineSeconds is set:**
@@ -772,7 +946,7 @@ spec.jobTemplate.spec.activeDeadlineSeconds  → JobTemplate level (inherited by
 
 **Cleanup:**
 ```bash
-kubectl delete -f 03-cronjob-deadline.yaml
+kubectl delete -f 04-cronjob-deadline.yaml
 kubectl delete jobs --all -n lifetime-demo
 ```
 
@@ -783,7 +957,7 @@ kubectl delete jobs --all -n lifetime-demo
 Configure the Job to ignore transient node evictions (don't penalise
 retries) but fail immediately on a known fatal exit code.
 
-**04-pod-failure-policy.yaml:**
+**05-pod-failure-policy.yaml:**
 ```yaml
 apiVersion: batch/v1
 kind: Job
@@ -812,7 +986,7 @@ spec:
 ```
 
 ```bash
-kubectl apply -f 04-pod-failure-policy.yaml
+kubectl apply -f 05-pod-failure-policy.yaml
 
 # Watch Pod — it should fail immediately without retrying
 kubectl get pods -l job-name=demo-failure-policy -w
@@ -853,7 +1027,7 @@ count against `backoffLimit` and the Job would retry normally. ✅
 
 **Cleanup:**
 ```bash
-kubectl delete -f 04-pod-failure-policy.yaml
+kubectl delete -f 05-pod-failure-policy.yaml
 ```
 
 ---
@@ -912,10 +1086,24 @@ at the CronJob level. These are two different concerns at two different spec lev
 
 ### Q: What is CrashLoopBackOff — is it a separate failure?
 
-**A:** No — `CrashLoopBackOff` is the **normal waiting state** between retries.
-Kubernetes applies exponential backoff delay before restarting a failed container.
-The sequence is: `Error → CrashLoopBackOff (waiting) → Error → CrashLoopBackOff → ...`
-until `backoffLimit` is exhausted. It does not consume an extra retry count.
+**A:** It depends on `restartPolicy`:
+- With `restartPolicy: OnFailure` — `CrashLoopBackOff` is the **normal waiting
+  state** between retries. Kubernetes holds back before restarting the same
+  container in-place using exponential backoff. It does NOT consume an extra retry
+  count. Sequence: `Error → CrashLoopBackOff (waiting) → Error → ...`
+  until `backoffLimit` is exhausted.
+- With `restartPolicy: Never` — `CrashLoopBackOff` does **not appear**. The
+  job-controller creates a brand new Pod for each retry. Old failed Pods remain
+  visible with `STATUS: Error`. You see a different Pod name each attempt.
+
+### Q: Does a bare Pod have backoffLimit?
+
+**A:** No — `backoffLimit` is a **Job-only** field. A bare Pod has no retry budget.
+Instead, a Pod's restart behaviour is controlled by `spec.restartPolicy`:
+`Always` (Deployments default), `OnFailure`, or `Never`. There is no count-based
+limit on Pod restarts — a Pod with `restartPolicy: Always` will restart indefinitely
+unless the node fails or the Pod is deleted. To apply a retry limit, wrap the
+workload in a Job.
 
 ### Q: Does podFailurePolicy require any feature gate to enable?
 
@@ -934,7 +1122,8 @@ In this lab, you:
   and Events section for `Warning` failure lines
 - ✅ Observed `backoffLimit` fire via `Warning BackoffLimitExceeded` Event before the deadline
 - ✅ Confirmed `CrashLoopBackOff` is the normal backoff wait between retries — not a separate error
-- ✅ Applied `terminationGracePeriodSeconds` and confirmed SIGKILL via exit code 137
+- ✅ Understood `terminationGracePeriodSeconds` concept and its distinction from `activeDeadlineSeconds` — full shutdown demo in [01-pod-lifecycle-termination-errors](../01-pod-lifecycle-termination-errors/) Step 7
+- ✅ Observed `FailureTarget` intermediate Job status and understood it as the cleanup window before `Failed` settles
 - ✅ Confirmed `completionDeadlineSeconds` is not a valid CronJob field — corrected to
   `spec.jobTemplate.spec.activeDeadlineSeconds` and `spec.startingDeadlineSeconds`
 - ✅ Used `podFailurePolicy` to fail a Job immediately on exit code 42 — confirmed
@@ -994,6 +1183,25 @@ BackoffLimitExceeded    → backoffLimit exhausted
 PodFailurePolicy        → podFailurePolicy FailJob rule matched
 ```
 
+✅ **Job status transitions for DeadlineExceeded — two-phase:**
+```
+FailureTarget  → intermediate: deadline fired, Pod cleanup in progress
+                  .status.conditions[0].type = FailureTarget
+                  .status.conditions[0].reason = DeadlineExceeded
+
+Failed         → final: all Pods gone, Job settled
+                  .status.conditions[1].type = Failed
+                  .status.conditions[1].reason = DeadlineExceeded
+
+jsonpath returns both:
+  kubectl get job <n> -o jsonpath='{.status.conditions[*].reason}' && echo
+  → DeadlineExceeded DeadlineExceeded   (one per condition — normal)
+
+Use [0] or [1] index to inspect a single condition as JSON:
+  kubectl get job <n> -o jsonpath='{.status.conditions[0]}' | python3 -m json.tool
+  (using [*] returns concatenated objects — not valid JSON for python3 -m json.tool)
+```
+
 ✅ **Field precedence — memorise:**
 ```
 activeDeadlineSeconds fires   → always wins, overrides backoffLimit
@@ -1032,9 +1240,20 @@ CronJob spec level:
 ✅ spec.startingDeadlineSeconds                       → correct field for schedule miss tolerance
 ```
 
-✅ **CrashLoopBackOff is NOT a failure — it is the backoff wait between retries:**
+✅ **CrashLoopBackOff — only with restartPolicy: OnFailure:**
 ```
-Error → CrashLoopBackOff → Error → CrashLoopBackOff → ... → Warning BackoffLimitExceeded
+restartPolicy: OnFailure → same Pod restarts in-place
+  Error → CrashLoopBackOff (waiting) → Error → ... → Warning BackoffLimitExceeded
+
+restartPolicy: Never → new Pod created for each retry, no CrashLoopBackOff
+  Error (Pod A) → Error (Pod B) → Error (Pod C) → ... → Warning BackoffLimitExceeded
+```
+
+✅ **backoffLimit is Job-only — bare Pods have no retry budget:**
+```
+Job  → spec.backoffLimit controls retry attempts (default 6)
+Pod  → spec.restartPolicy controls restarts (Always / OnFailure / Never)
+       no count-based limit — restarts indefinitely with Always or OnFailure
 ```
 
 ✅ **Timer starts at Job status.startTime — not object creation:**
