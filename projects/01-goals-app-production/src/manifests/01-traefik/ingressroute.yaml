@@ -1,0 +1,23 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: goals-frontend-route
+  namespace: goals-production
+spec:
+  # entryPoints: which Traefik listeners handle this route
+  # "web" is the HTTP listener (port 80/NodePort 30080)
+  entryPoints:
+    - web
+
+  routes:
+    - match: Host(`goals.local`) # matches Host header: goals.local
+      kind: Rule
+      middlewares:
+        - name: rate-limit # apply rate limiting
+          namespace: goals-production
+        - name: security-headers # apply security headers
+          namespace: goals-production
+      services:
+        - name: goals-frontend-svc
+          port: 3000
+          # weight: 1 — single service. Multiple services enable canary deployments.

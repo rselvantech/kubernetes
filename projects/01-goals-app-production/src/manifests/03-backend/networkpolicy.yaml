@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-network-policy
+  namespace: goals-production
+spec:
+  podSelector:
+    matchLabels:
+      app: goals-backend
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow: frontend pods → backend port 80 (API calls via nginx proxy)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: goals-frontend
+      ports:
+        - port: 80
+
+  egress:
+    # Allow: backend → mongodb port 27017 (database queries)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: mongodb
+      ports:
+        - port: 27017
+    # Allow: backend → kube-dns port 53 (DNS resolution)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: goals-production
+spec:
+  # Regular ClusterIP Service for application connections.
+  # Provides a stable VIP that survives pod restarts.
+  # backend connects to: mongodb:27017 (resolves to this ClusterIP)
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017

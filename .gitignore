@@ -1,3 +1,4 @@
 temp/
 *bkp
 *env
+node_modules/

@@ -1,0 +1,28 @@
+# RateLimit middleware — limits requests per IP per second
+# Protects backend from traffic spikes and simple DDoS
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: goals-production
+spec:
+  rateLimit:
+    average: 100 # average req/s per source IP
+    burst: 50 # burst allowance above average
+
+---
+# SecurityHeaders middleware — adds security HTTP headers to all responses
+# Prevents common web vulnerabilities: clickjacking, MIME sniffing, XSS
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: security-headers
+  namespace: goals-production
+spec:
+  headers:
+    frameDeny: true # X-Frame-Options: DENY — prevent clickjacking
+    contentTypeNosniff: true # X-Content-Type-Options: nosniff — MIME sniffing
+    browserXssFilter: true # X-XSS-Protection: 1; mode=block
+    forceSTSHeader: true # Strict-Transport-Security (for HTTPS)
+    stsSeconds: 15552000
+    stsIncludeSubdomains: true

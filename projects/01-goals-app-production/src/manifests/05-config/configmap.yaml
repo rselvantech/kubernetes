@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: goals-app-config
+  namespace: goals-production
+data:
+  # MongoDB Service name — matches mongodb-service.yaml metadata.name
+  # Used by: backend (connection string host), init container (readiness check)
+  MONGODB_HOST: "mongodb"
+
+  # MongoDB database name — must match what app.js uses
+  MONGODB_DATABASE: "course-goals"
+
+  # Backend Service name — used by nginx frontend proxy_pass
+  # Must match backend-service.yaml metadata.name
+  BACKEND_HOST: "goals-backend-svc"

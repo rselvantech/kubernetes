@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongodb-pdb
+  namespace: goals-production
+spec:
+  # maxUnavailable: 0 — MongoDB must NEVER be voluntarily disrupted.
+  # This prevents: node drains, cluster upgrades, kubectl drain
+  # from evicting the MongoDB pod.
+  # If MongoDB must be taken down, it requires manual intervention.
+  # Production: use a MongoDB replica set — then maxUnavailable: 1 is safe.
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: mongodb

@@ -1,0 +1,67 @@
+# Traefik v3 Helm values for minikube NodePort deployment
+# Chart version: 39.x (Traefik proxy v3.6.x)
+
+# ── Deployment ────────────────────────────────────────────────────────────
+deployment:
+  replicas:
+    1 # single replica sufficient for minikube
+    # production: 2+ with PodDisruptionBudget
+
+# ── EntryPoints ───────────────────────────────────────────────────────────
+# EntryPoints are Traefik's network listeners.
+# Each defines a port and protocol.
+ports:
+  web:
+    port: 8000 # Traefik listens on 8000 internally
+    expose:
+      default: true
+    exposedPort: 80 # NodePort service maps :80 externally
+    nodePort:
+      30080 # fixed NodePort — access via $(minikube ip):30080
+      # production: type LoadBalancer — cloud provides IP
+  traefik: # Traefik dashboard port
+    port: 9000
+    expose:
+      default: true
+    nodePort: 30900 # dashboard at $(minikube ip):30900
+
+# ── Service ───────────────────────────────────────────────────────────────
+service:
+  type:
+    NodePort # minikube: NodePort + /etc/hosts entry
+    # production: LoadBalancer (cloud provisioned)
+
+# ── Providers ─────────────────────────────────────────────────────────────
+# Traefik reads routing configuration from two providers:
+#   kubernetesIngress: watches standard Ingress objects
+#   kubernetesCRD:     watches IngressRoute, Middleware, etc. (enabled by default)
+providers:
+  kubernetesIngress:
+    enabled: true
+  kubernetesCRD:
+    enabled: true # enables IngressRoute, Middleware CRDs
+
+# ── Dashboard ─────────────────────────────────────────────────────────────
+ingressRoute:
+  dashboard:
+    enabled: true
+    matchRule: Host(`traefik.local`) # dashboard at http://traefik.local:30080
+    entryPoints:
+      - web
+
+# ── Logging ───────────────────────────────────────────────────────────────
+logs:
+  general:
+    level: INFO # DEBUG for troubleshooting, INFO for normal ops
+  access:
+    enabled: true # log every proxied request
+    format: json # structured JSON — compatible with Loki
+
+# ── Resources ─────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 256Mi

@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goals-backend
+  namespace: goals-production
+spec:
+  replicas: 2 # 2 replicas for HA — backend is stateless
+  selector:
+    matchLabels:
+      app: goals-backend
+  template:
+    metadata:
+      labels:
+        app: goals-backend
+    spec:
+      terminationGracePeriodSeconds: 30 # matches SIGTERM handler in app.js
+
+      # ── Init container ───────────────────────────────────────────────
+      # Runs before Node.js starts. Polls MongoDB headless DNS until
+      # mongosh ping returns exit 0 (MongoDB accepting authenticated queries).
+      # Node.js NEVER starts until MongoDB is confirmed ready.
+      # This eliminates the startup race condition entirely.
+      initContainers:
+        - name: wait-for-mongodb
+          image: mongo:6.0
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for MongoDB to be ready..."
+              until mongosh \
+                --host mongodb-0.mongodb-headless.goals-production.svc.cluster.local \
+                --username "$MONGODB_USERNAME" \
+                --password "$MONGODB_PASSWORD" \
+                --authenticationDatabase admin \
+                --eval "db.adminCommand('ping')" \
+                --quiet > /dev/null 2>&1; do
+                echo "MongoDB not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "MongoDB is ready. Starting backend."
+          env:
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGODB_USERNAME
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGODB_PASSWORD
+
+      containers:
+        - name: goals-backend
+          image: rselvantech/goals-backend:v2.0.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 80
+            - name: metrics
+              containerPort: 80 # metrics served on same port, /metrics path
+
+          env:
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGODB_USERNAME
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGODB_PASSWORD
+            # ConfigMap values — not sensitive, plain env vars
+            - name: MONGODB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: goals-app-config
+                  key: MONGODB_HOST
+            - name: MONGODB_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: goals-app-config
+                  key: MONGODB_DATABASE
+
+          # ── Liveness probe ─────────────────────────────────────────
+          # GET /health — returns 200 if Node.js process is alive.
+          # Does NOT check MongoDB. A DB outage should not restart the pod
+          # (restarting will not fix MongoDB).
+          # failureThreshold 3 × periodSeconds 10 = 30s before restart
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 15 # wait for Node.js to start + OTel init
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Readiness probe ────────────────────────────────────────
+          # GET /ready — returns 200 only if Node.js AND MongoDB are connected.
+          # Returns 503 if MongoDB disconnected → pod removed from endpoints.
+          # Traffic stops flowing to this pod until MongoDB reconnects.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"

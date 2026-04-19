@@ -39,7 +39,7 @@ EndpointSlices need attention.
 - kubectl installed and configured
 
 **Knowledge Requirements:**
-- **REQUIRED:** Completion of [13-clusterip-nodeport](../13-clusterip-nodeport/)
+- **REQUIRED:** Completion of [13-clusterip-nodeport](../01-clusterip-nodeport/README.md)
 - Understanding of iptables basics (helpful but not required)
 
 ## Lab Objectives

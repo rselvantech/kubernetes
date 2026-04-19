@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goals-frontend
+  namespace: goals-production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: goals-frontend
+  template:
+    metadata:
+      labels:
+        app: goals-frontend
+    spec:
+      terminationGracePeriodSeconds: 10 # nginx drains quickly
+
+      containers:
+        - name: goals-frontend
+          image: rselvantech/goals-frontend:v2.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+
+          env:
+            - name: BACKEND_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: goals-app-config
+                  key: BACKEND_HOST
+
+          # ── Liveness probe ────────────────────────────────────────
+          # GET /health — nginx returns 200 immediately if serving.
+          # Restarts if nginx stops responding entirely.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Readiness probe ───────────────────────────────────────
+          # GET /health — same endpoint.
+          # Pod removed from Service if nginx stops serving.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"

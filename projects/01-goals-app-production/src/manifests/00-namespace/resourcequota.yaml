@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: goals-production-quota
+  namespace: goals-production
+spec:
+  hard:
+    # Pod count ceiling — prevents runaway deployments
+    pods: "15"
+    # CPU: sum of all container requests must not exceed this
+    requests.cpu: "2"
+    # Memory: sum of all container requests must not exceed this
+    requests.memory: "4Gi"
+    # CPU: sum of all container limits must not exceed this
+    limits.cpu: "4"
+    # Memory: sum of all container limits must not exceed this
+    limits.memory: "8Gi"
+    # PVC count — prevents accidental PVC proliferation
+    persistentvolumeclaims: "5"

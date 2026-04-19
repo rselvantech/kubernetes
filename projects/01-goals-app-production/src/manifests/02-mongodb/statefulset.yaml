@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: goals-production
+spec:
+  serviceName:
+    mongodb-headless # must match headless Service name
+    # used for pod DNS: mongodb-0.mongodb-headless
+  replicas: 1 # single instance — no replica set complexity
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      # terminationGracePeriodSeconds: time Kubernetes waits for graceful
+      # shutdown before SIGKILL. MongoDB needs time to flush journal.
+      terminationGracePeriodSeconds: 60
+
+      # ── Init containers ─────────────────────────────────────────────
+      # Init containers run to completion before any regular container starts.
+      # This init container tunes the Linux kernel for MongoDB performance.
+      initContainers:
+        - name: init-mongodb-sysctl
+          image: busybox:1.36
+          # vm.max_map_count: MongoDB requires at least 262144 for mmapv1
+          # and WiredTiger. Default Linux value is 65536 — too low.
+          # Must be set in the host kernel (requires privileged access).
+          command:
+            - sh
+            - -c
+            - |
+              echo "Setting vm.max_map_count for MongoDB..."
+              sysctl -w vm.max_map_count=262144
+              echo "Done."
+          securityContext:
+            privileged: true # required for sysctl
+            runAsUser: 0
+
+      containers:
+        - name: mongodb
+          image: mongo:6.0
+          ports:
+            - containerPort: 27017
+
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_USERNAME
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_PASSWORD
+
+          # ── Liveness probe ───────────────────────────────────────────
+          # tcpSocket: checks if mongod is listening on :27017.
+          # Fast, no auth required. Restarts pod if mongod stops listening.
+          # Does NOT validate authenticated query capability — that is readiness.
+          livenessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 30 # MongoDB takes time to start
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Readiness probe ──────────────────────────────────────────
+          # exec mongosh ping: validates MongoDB accepts authenticated queries.
+          # Pod not Ready until this passes — init container in backend will
+          # wait for this before starting the Node.js process.
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --eval
+                - "db.adminCommand('ping')"
+                - --username
+                - $(MONGO_INITDB_ROOT_USERNAME)
+                - --password
+                - $(MONGO_INITDB_ROOT_PASSWORD)
+                - --authenticationDatabase
+                - admin
+                - --quiet
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 10 # mongosh can be slow on first run
+
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+
+  # ── volumeClaimTemplate ───────────────────────────────────────────────
+  # StatefulSet creates a PVC per pod, named: data-mongodb-0
+  # PVC persists across pod deletion and is reattached on pod recreation.
+  # Unlike a standalone PVC, StatefulSet manages the PVC lifecycle.
+  volumeClaimTemplates:
+    - metadata:
+        name: mongodb-data
+      spec:
+        accessModes:
+          - ReadWriteOnce # single node read/write — correct for MongoDB
+        storageClassName: standard # ← add this explicitly
+        resources:
+          requests:
+            storage: 2Gi

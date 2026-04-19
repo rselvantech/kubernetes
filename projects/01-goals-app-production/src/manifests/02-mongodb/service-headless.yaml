@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-headless
+  namespace: goals-production
+spec:
+  # clusterIP: None creates a headless Service.
+  # Instead of a stable VIP, DNS returns individual pod IPs directly.
+  # mongodb-0.mongodb-headless.goals-production.svc.cluster.local
+  #   → resolves to mongodb-0 pod IP
+  # Required by: init containers (direct pod readiness check)
+  #              StatefulSet (stable pod DNS identity)
+  clusterIP: None
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017

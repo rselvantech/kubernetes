@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: goals-production-limits
+  namespace: goals-production
+spec:
+  limits:
+    - type: Container
+      # default: applied to containers with no limits specified
+      default:
+        cpu: "200m"
+        memory: "256Mi"
+      # defaultRequest: applied to containers with no requests specified
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      # max: no single container can exceed these
+      max:
+        cpu: "1"
+        memory: "2Gi"
+      # min: no single container can go below these
+      min:
+        cpu: "10m"
+        memory: "16Mi"

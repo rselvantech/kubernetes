@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: goals-production
+spec:
+  # minAvailable: 1 — at least 1 backend pod must be available during
+  # voluntary disruptions (node drain, cluster upgrade).
+  # With replicas: 2, this allows draining one node at a time.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: goals-backend
